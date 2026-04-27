@@ -1,0 +1,5 @@
+# Native desktop window (falls back to browser if missing)
+pywebview>=4.0
+
+# PCAN hardware flashing support (falls back to simulation if missing)
+python-can>=4.0
