@@ -87,21 +87,32 @@ def simulate_flash_sequence(files_data, times):
             
             steps = 20
             
-            push_trace("TX", "18DA10F1", "02 10 03 00 00 00 00 00", "DiagSessionControl (0x10) - Extended")
-            push_trace("RX", "18DAF110", "06 50 03 00 32 01 F4 00", "Positive Response (0x50)")
-            push_trace("TX", "18DA10F1", "02 27 01 00 00 00 00 00", "SecurityAccess (0x27) - Request Seed")
-            push_trace("RX", "18DAF110", "06 67 01 12 34 56 78 00", "Positive Response (0x67)")
-            push_trace("TX", "18DA10F1", "10 24 34 00 44 33 22 11", "RequestDownload (0x34)")
-            push_trace("RX", "18DAF110", "30 00 00 00 00 00 00 00", "FlowControl")
+            push_trace("TX", "7DF", "02 10 83 00 00 00 00 00", "DiagSessionControl (0x10) - Extended (functional, suppressPosRsp)")
+            push_trace("TX", "7DF", "02 85 82 00 00 00 00 00", "ControlDTCSetting (0x85) - OFF (functional, suppressPosRsp)")
+            push_trace("TX", "7DF", "03 28 83 03 00 00 00 00", "CommunicationControl (0x28) - OFF (functional, suppressPosRsp)")
+            push_trace("TX", "740", "02 27 05 00 00 00 00 00", "SecurityAccess (0x27) - Request Seed L3")
+            push_trace("RX", "748", "0A 67 05 12 34 56 78 9A BC DE F0", "SecurityAccess seed response (0x67)")
+            push_trace("TX", "740", "10 0A 27 06 AA BB CC DD", "SecurityAccess (0x27) - Send Key FF")
+            push_trace("RX", "748", "30 00 00 00 00 00 00 00", "FlowControl")
+            push_trace("RX", "748", "02 67 06 00 00 00 00 00", "SecurityAccess unlock response (0x67)")
+            push_trace("TX", "740", "02 10 02 00 00 00 00 00", "DiagSessionControl (0x10) - Programming")
+            push_trace("RX", "748", "06 50 02 00 32 01 F4 00", "DiagSessionControl positive response (0x50)")
+            push_trace("TX", "740", "06 31 01 02 00 01 00 00", "RoutineControl (0x31) - Set Boot Flag")
+            push_trace("RX", "748", "04 71 01 02 00 00 00 00", "RoutineControl response (0x71)")
+            push_trace("TX", "740", "05 31 01 FF 00 02 00 00", "RoutineControl (0x31) - Erase Memory")
+            push_trace("RX", "748", "04 71 01 FF 00 00 00 00", "RoutineControl erase response (0x71)")
+            push_trace("TX", "740", "10 0B 34 00 44 00 00 00", "RequestDownload (0x34) FF")
+            push_trace("RX", "748", "30 00 00 00 00 00 00 00", "FlowControl")
+            push_trace("RX", "748", "04 74 20 10 03 00 00 00", "RequestDownload response (0x74)")
             push_trace("EVT", "—", "—", "UDS Flash Sequence Started")
             
             for step in range(steps):
                 time.sleep(0.12)  # Simulate chunk write delays
                 
-                # Push fake transfer data frames
-                push_trace("TX", "18DA10F1", "36 01 AA BB CC DD EE FF", f"TransferData (0x36) - Block {step+1}")
+                bsc = ((step + 1) % 256)
+                push_trace("TX", "740", f"36 {bsc:02X} AA BB CC DD EE FF", f"TransferData (0x36) - Block {step+1}")
                 if step % 2 == 0:
-                     push_trace("RX", "18DAF110", "02 76 01 00 00 00 00 00", "Positive Response (0x76)")
+                     push_trace("RX", "748", f"02 76 {bsc:02X} 00 00 00 00 00", "TransferData positive response (0x76)")
                 
                 p = (step / steps) * 100.0
                 flash_session['progress'] = p
