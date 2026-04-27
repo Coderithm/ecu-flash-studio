@@ -1,0 +1,287 @@
+{
+  "meta": {
+    "name": "Mahindra Template",
+    "oem": "Mahindra",
+    "ecu": "ReplaceWithECUName",
+    "protocol": "UDS_on_CAN",
+    "version": "2.0",
+    "notes": "Updated to match Mahindra UDS Flash Programming Specification (pg. 8-47). Replace placeholder values with ECU-specific values."
+  },
+  "can": {
+    "request_id": "740",
+    "response_id": "748",
+    "functional_id": "7df",
+    "addressing": "normal_11bit",
+    "channel": 1,
+    "fd": false,
+    "padding_byte": "00"
+  },
+  "isotp": {
+    "flow_control_block_size": 255,
+    "flow_control_stmin_ms": 0,
+    "max_frame_data_length": 8
+  },
+  "session": {
+    "default_session": {
+      "service": "10",
+      "subfunction": "01",
+      "positive_response": "50"
+    },
+    "extended_session": {
+      "service": "10",
+      "subfunction": "03",
+      "positive_response": "50",
+      "addressing": "functional",
+      "suppress_positive_response": true
+    },
+    "programming_session": {
+      "service": "10",
+      "subfunction": "02",
+      "positive_response": "50"
+    },
+    "tester_present": {
+      "enabled": true,
+      "addressing": "functional",
+      "service": "3e",
+      "subfunction": "80",
+      "positive_response": "7e",
+      "interval_ms": 2000
+    },
+    "session_timing": {
+      "p2_server_max_ms": 50,
+      "p2_star_server_max_ms": 5000,
+      "p2_star_resolution_ms": 10
+    }
+  },
+  "communication_control": {
+    "enabled": true,
+    "service": "28",
+    "subfunction": "03",
+    "communication_type": "03",
+    "positive_response": "68",
+    "addressing": "functional",
+    "suppress_positive_response": true
+  },
+  "communication_control_enable": {
+    "enabled": true,
+    "service": "28",
+    "subfunction": "00",
+    "communication_type": "03",
+    "positive_response": "68",
+    "addressing": "functional",
+    "suppress_positive_response": true
+  },
+  "control_dtc_setting": {
+    "enabled": true,
+    "service": "85",
+    "subfunction": "02",
+    "positive_response": "c5",
+    "addressing": "functional",
+    "suppress_positive_response": true
+  },
+  "control_dtc_setting_enable": {
+    "enabled": true,
+    "service": "85",
+    "subfunction": "01",
+    "positive_response": "c5",
+    "addressing": "functional",
+    "suppress_positive_response": true
+  },
+  "security": {
+    "enabled": true,
+    "request_seed": {
+      "service": "27",
+      "subfunction": "05",
+      "positive_response": "67"
+    },
+    "send_key": {
+      "service": "27",
+      "subfunction": "06",
+      "positive_response": "67"
+    },
+    "seed_length": 8,
+    "key_length": 8,
+    "algorithm": {
+      "type": "python",
+      "module": "mahindra_seed_key_v1",
+      "function": "compute_key"
+    }
+  },
+  "download": {
+    "request_download_service": "34",
+    "positive_response": "74",
+    "data_format_identifier": "00",
+    "address_length_bytes": 4,
+    "size_length_bytes": 4,
+    "use_memory_identifier": false,
+    "memory_identifier": "",
+    "compression": false,
+    "encryption": false
+  },
+  "transfer": {
+    "transfer_data_service": "36",
+    "transfer_data_positive_response": "76",
+    "transfer_exit_service": "37",
+    "transfer_exit_positive_response": "77",
+    "payload_bytes_per_request": 4093,
+    "block_sequence_start": 1,
+    "block_sequence_rollover": 256,
+    "use_negotiated_block_length": true,
+    "wait_for_positive_response_per_block": true
+  },
+  "routines": {
+    "set_boot_flag": {
+      "enabled": true,
+      "service": "31",
+      "subfunction": "01",
+      "routine_id": "0200",
+      "data": "01",
+      "positive_response": "71"
+    },
+    "erase_memory": {
+      "enabled": true,
+      "service": "31",
+      "subfunction": "01",
+      "routine_id": "ff00",
+      "erase_target": "02",
+      "positive_response": "71",
+      "payload_format": "erase_target"
+    },
+    "checksum_verify": {
+      "enabled": true,
+      "service": "31",
+      "subfunction": "01",
+      "routine_id": "ff01",
+      "positive_response": "71",
+      "payload_format": "crc16"
+    },
+    "update_history_zone": {
+      "enabled": true,
+      "service": "31",
+      "subfunction": "01",
+      "routine_id": "0201",
+      "positive_response": "71",
+      "record_length": 25
+    },
+    "clear_boot_flag": {
+      "enabled": true,
+      "service": "31",
+      "subfunction": "01",
+      "routine_id": "0200",
+      "data": "00",
+      "positive_response": "71"
+    },
+    "dependency_check": {
+      "enabled": false,
+      "service": "31",
+      "subfunction": "01",
+      "routine_id": "ff02",
+      "positive_response": "71",
+      "payload_format": "none"
+    }
+  },
+  "access_timing": {
+    "enabled": true,
+    "service": "83",
+    "subfunction": "04",
+    "positive_response": "c3",
+    "p2_min_ms": 0,
+    "p2_max_ms": 50,
+    "p3_min_ms": 0,
+    "p3_max_ms": 0,
+    "stmin_ms": 0
+  },
+  "link_control": {
+    "enabled": false,
+    "service": "87",
+    "positive_response": "c7",
+    "verify_subfunction": "02",
+    "transition_subfunction": "03",
+    "mode_parameter": "000000"
+  },
+  "clear_dtc": {
+    "enabled": true,
+    "service": "14",
+    "positive_response": "54",
+    "group_of_dtc": "ffffff"
+  },
+  "timing": {
+    "frame_interval_ms": 1,
+    "p2_timeout_ms": 50,
+    "p2_star_timeout_ms": 5000,
+    "erase_delay_ms": 100,
+    "download_delay_ms": 20,
+    "transfer_block_delay_ms": 2,
+    "transfer_exit_delay_ms": 20,
+    "post_routine_delay_ms": 20,
+    "reset_delay_ms": 100,
+    "access_timing_delay_ms": 0,
+    "boot_flag_delay_ms": 0,
+    "checksum_delay_ms": 100,
+    "history_zone_delay_ms": 0,
+    "clear_dtc_delay_ms": 0
+  },
+  "memory": {
+    "separate_segments": true,
+    "fill_gaps": false,
+    "regions": [
+      {
+        "name": "application",
+        "start": "00000000",
+        "end": "0007ffff",
+        "erase_before_download": true
+      }
+    ]
+  },
+  "sequence": [
+    "extended_session",
+    "control_dtc_setting",
+    "communication_control",
+    "security_request_seed",
+    "security_send_key",
+    "programming_session",
+    "set_boot_flag",
+    "access_timing_parameters",
+    "erase_memory",
+    "request_download",
+    "transfer_data",
+    "transfer_exit",
+    "checksum_verify",
+    "update_history_zone",
+    "clear_boot_flag",
+    "ecu_reset",
+    "communication_control_enable",
+    "control_dtc_setting_enable",
+    "clear_dtc"
+  ],
+  "responses": {
+    "negative_response_service": "7f",
+    "response_pending_nrc": "78",
+    "allow_response_pending": true,
+    "common_nrcs": [
+      "12",
+      "13",
+      "22",
+      "24",
+      "31",
+      "33",
+      "35",
+      "36",
+      "37",
+      "70",
+      "71",
+      "72",
+      "73",
+      "78",
+      "7e",
+      "7f",
+      "92",
+      "93"
+    ]
+  },
+  "reset": {
+    "service": "11",
+    "subfunction": "01",
+    "positive_response": "51"
+  }
+}
