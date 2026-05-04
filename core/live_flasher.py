@@ -1,4 +1,13 @@
-import argparse
+"""
+live_flasher.py — Dashboard-integrated adapter for the CAN live flasher engine.
+
+This module bridges the full-featured CAN live flasher (can_live_flasher.py)
+with the FYI Dashboard's API routes for progress reporting and CAN trace logging.
+
+When PCAN hardware is available, it executes the real UDS flash sequence.
+When hardware is unavailable, the caller (api_routes.py) falls back to simulation.
+"""
+
 import os
 import sys
 import time
@@ -13,57 +22,64 @@ from core.hex_parsing import (
     select_flash_segments,
     build_runtime_context,
     build_flash_sequence,
+    build_security_key,
+    isotp_encode,
     load_profile,
     DEFAULT_PROFILE,
-    FIRMWARE_DIR
+    FIRMWARE_DIR,
 )
+
+from core.can_live_flasher import (
+    ReceivedResponse,
+    LiveRuntime,
+    build_live_runtime,
+    validate_live_security_config,
+    read_current_ecu_version,
+    send_live,
+    drain_bus,
+    wait_for_bus_idle,
+    wait_for_flow_control,
+    wait_for_response,
+    is_critical_request,
+    is_clear_dtc_request,
+    is_control_dtc_setting_enable_request,
+    is_response_pending_frame,
+    response_timeout_for,
+    should_retry_response,
+    describe_negative_response,
+    decode_single_frame_payload,
+    log as can_log,
+)
+
 import core.api_routes as api
 
 
-def wait_for_flow_control(bus, expected_rx_id: int, timeout: float = 1.0):
-    """Wait for a Flow Control (30 xx xx) frame from the ECU."""
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        msg = bus.recv(0.1)
-        if msg and msg.arbitration_id == expected_rx_id:
-            if msg.data and (msg.data[0] >> 4) == 0x3:  # Flow Control NIbble
-                return msg
-    return None
-
-
-def wait_for_response(bus, expected_rx_id: int, expected_data: bytes, timeout: float):
-    """Wait for the ECU's response, handling 7F xx 78 (Response Pending) dynamically."""
-    start_time = time.time()
-    
-    while time.time() - start_time < timeout:
-        msg = bus.recv(0.1)
-        if not msg:
-            continue
-            
-        if msg.arbitration_id == expected_rx_id:
-            # Check for ResponsePending (7F xx 78)
-            if len(msg.data) >= 3 and (msg.data[0] & 0x0F) == 3 and msg.data[1] == 0x7F and msg.data[3] == 0x78:
-                 # It's a Single Frame containing 7F xx 78 (e.g., 03 7F 31 78)
-                 # Note: UDS Single Frames start with length, so 03 7F XX 78
-                 print("    [ECU indicates Response Pending (78) - Delaying timeout]")
-                 start_time = time.time()  # Reset timeout!
-                 continue
-                 
-            # For this simple executor, returning any matching response ID is a "catch".
-            # We compare it loosely against expected_data or let the sequence proceed.
-            # In a robust stack, we'd fully parse the UDS payload.
-            return msg
-
-    return None
-
-
 def process_live_flash(profile_path: str, files_data, times):
+    """
+    Execute a live UDS flash sequence on PCAN hardware, reporting progress
+    and CAN trace events to the dashboard's api_routes module.
+
+    Args:
+        profile_path: Path to the OEM profile JSON.
+        files_data: List of dicts with 'name' key for each hex file.
+        times: Number of times to repeat the full sequence.
+
+    Returns:
+        True on success, False on failure (caller should fall back to simulation).
+    """
     if can is None:
         print("[BACKEND] python-can not installed — cannot use PCAN hardware.")
         return False
+
     baudrate = 500000
     profile = load_profile(profile_path)
     ctx = build_runtime_context(profile)
+
+    if not validate_live_security_config(profile):
+        api.push_trace("EVT", "—", "—", "FAILED: Security configuration validation failed.")
+        return False
+
+    runtime = build_live_runtime(profile, ctx)
 
     hex_files = [f["name"] for f in files_data]
     if not hex_files:
@@ -78,6 +94,11 @@ def process_live_flash(profile_path: str, files_data, times):
         return False
 
     expected_rx_id = int(ctx.response_id, 16)
+    tx_can_id_int = int(ctx.request_id, 16)
+
+    # Pre-flash ECU version read
+    api.push_trace("EVT", "—", "—", "Reading initial ECU version...")
+    read_current_ecu_version(bus, runtime, profile, ctx, tx_can_id_int, expected_rx_id, "Initial ECU version")
 
     total_files = len(hex_files) * times
     api.flash_session['total_ops'] = total_files
@@ -100,6 +121,12 @@ def process_live_flash(profile_path: str, files_data, times):
             trace = build_flash_sequence(selected_segments, ctx)
             total_frames = len(trace)
 
+            api.push_trace("EVT", "—", "—", f"Executing {total_frames} frames for {name}")
+
+            # Dynamic seed-key: stores real ISO-TP frames for send_key
+            real_send_key_frames = []
+            last_tx_msg = None
+
             for i, frame in enumerate(trace):
                 # Update Progress
                 p = (i / total_frames) * 100.0
@@ -112,49 +139,146 @@ def process_live_flash(profile_path: str, files_data, times):
                     api.flash_session['eta_seconds'] = int((elapsed_total / current_fraction) - elapsed_total)
 
                 try:
+                    # ── TRANSMIT ──
                     if frame.direction == 'Tx':
                         if frame.comment:
                             api.push_trace("EVT", "—", "—", f"Step {i+1}/{total_frames}: {frame.comment}")
-                            
+
+                        # Replace send_key frames with real computed key
+                        send_data = list(frame.data)
+                        if real_send_key_frames and 'send key' in (frame.comment or '').lower():
+                            send_data = real_send_key_frames.pop(0)
+                        elif real_send_key_frames and (frame.data[0] >> 4) == 0x2:
+                            send_data = real_send_key_frames.pop(0)
+
+                        if runtime.drain_before_critical and is_critical_request(send_data):
+                            if not drain_bus(bus, runtime, f"before {frame.comment or 'request'}"):
+                                api.push_trace("EVT", "—", "—", "FAIL: External tester traffic detected.")
+                                bus.shutdown()
+                                return False
+
                         msg = can.Message(
                             arbitration_id=int(frame.can_id, 16),
-                            data=frame.data,
+                            data=send_data,
                             is_extended_id=False
                         )
-                        bus.send(msg)
-                        
-                        data_hex = ' '.join(f'{b:02X}' for b in frame.data)
+
+                        if is_clear_dtc_request(msg):
+                            if not wait_for_bus_idle(bus, runtime, "ClearDTC"):
+                                api.push_trace("EVT", "—", "—", "FAIL: Bus not idle before ClearDTC.")
+                                bus.shutdown()
+                                return False
+
+                        send_live(bus, msg, runtime)
+                        last_tx_msg = msg
+
+                        data_hex = ' '.join(f'{b:02X}' for b in send_data)
                         api.push_trace("TX", hex(msg.arbitration_id)[2:].upper(), data_hex, frame.comment)
 
-                        pci_nibble = frame.data[0] >> 4
+                        if is_control_dtc_setting_enable_request(msg):
+                            read_current_ecu_version(
+                                bus, runtime, profile, ctx,
+                                tx_can_id_int, expected_rx_id,
+                                "Post-flash ECU version",
+                            )
+
+                        # Handle ISO-TP First Frame Flow Control
+                        pci_nibble = send_data[0] >> 4
                         if pci_nibble == 0x1:
-                            fc_msg = wait_for_flow_control(bus, expected_rx_id, timeout=1.0)
+                            fc_msg = wait_for_flow_control(bus, expected_rx_id, runtime, timeout=1.0)
                             if not fc_msg:
                                 api.push_trace("EVT", "—", "—", "FAIL: Timeout waiting for FlowControl from ECU.")
+                                bus.shutdown()
                                 return False
                             fc_data_hex = ' '.join(f'{b:02X}' for b in fc_msg.data)
                             api.push_trace("RX", hex(fc_msg.arbitration_id)[2:].upper(), fc_data_hex, "FlowControl")
 
+                    # ── RECEIVE ──
                     elif frame.direction == 'Rx':
-                        timeout = 5.0
-                        rx_msg = wait_for_response(bus, expected_rx_id, frame.data, timeout=timeout)
+                        # Skip Consecutive Frames and Flow Control frames - already handled
+                        pci = frame.data[0] >> 4
+                        if pci == 0x2 or pci == 0x3:
+                            continue
+                        if is_response_pending_frame(frame.data):
+                            continue
+
+                        timeout = response_timeout_for(frame)
+                        rx_msg = wait_for_response(
+                            bus,
+                            expected_rx_id,
+                            frame.data,
+                            runtime,
+                            operation_timeout=timeout,
+                            tx_can_id=tx_can_id_int,
+                        )
+
                         if not rx_msg:
-                            expected_hex = ' '.join(f'{b:02X}' for b in frame.data)
-                            api.push_trace("EVT", "—", "—", f"FAIL: Timeout waiting for expected ECU response: {expected_hex}")
+                            if should_retry_response(frame) and last_tx_msg is not None:
+                                for attempt in range(1, runtime.clear_dtc_retries + 1):
+                                    api.push_trace("EVT", "—", "—",
+                                        f"No response; retrying ({attempt}/{runtime.clear_dtc_retries})...")
+                                    time.sleep(runtime.clear_dtc_retry_delay)
+                                    if is_clear_dtc_request(last_tx_msg):
+                                        if not wait_for_bus_idle(bus, runtime, "ClearDTC retry"):
+                                            bus.shutdown()
+                                            return False
+                                    send_live(bus, last_tx_msg, runtime)
+                                    retry_hex = ' '.join(f'{b:02X}' for b in last_tx_msg.data)
+                                    api.push_trace("TX", hex(last_tx_msg.arbitration_id)[2:].upper(), retry_hex, "Retry")
+                                    rx_msg = wait_for_response(
+                                        bus, expected_rx_id, frame.data, runtime,
+                                        operation_timeout=timeout, tx_can_id=tx_can_id_int,
+                                    )
+                                    if rx_msg:
+                                        break
+                                if not rx_msg:
+                                    expected_hex = ' '.join(f'{b:02X}' for b in frame.data)
+                                    api.push_trace("EVT", "—", "—", f"FAIL: Timeout after retry. Expected: {expected_hex}")
+                                    bus.shutdown()
+                                    return False
+                            else:
+                                expected_hex = ' '.join(f'{b:02X}' for b in frame.data)
+                                api.push_trace("EVT", "—", "—", f"FAIL: Timeout waiting for ECU response: {expected_hex}")
+                                bus.shutdown()
+                                return False
+
+                        rx_data_hex = ' '.join(f'{b:02X}' for b in rx_msg.msg.data)
+                        api.push_trace("RX", hex(rx_msg.msg.arbitration_id)[2:].upper(), rx_data_hex, frame.comment)
+
+                        negative_response = describe_negative_response(rx_msg.payload)
+                        if negative_response:
+                            api.push_trace("EVT", "—", "—", f"FAIL: ECU negative response: {negative_response}")
+                            bus.shutdown()
                             return False
-                        
-                        rx_data_hex = ' '.join(f'{b:02X}' for b in rx_msg.data)
-                        api.push_trace("RX", hex(rx_msg.arbitration_id)[2:].upper(), rx_data_hex, frame.comment)
-                        
+
+                        # --- Detect SecurityAccess seed response and compute real key ---
+                        payload = rx_msg.payload
+                        if payload and len(payload) >= 3 and payload[0] == 0x67:
+                            seed = payload[2:]
+                            seed_hex = ' '.join(f'{b:02X}' for b in seed)
+                            api.push_trace("EVT", "—", "—", f"REAL SEED: {seed_hex}")
+                            real_key = build_security_key(ctx, seed)
+                            key_hex = ' '.join(f'{b:02X}' for b in real_key)
+                            api.push_trace("EVT", "—", "—", f"COMPUTED KEY: {key_hex}")
+                            sf_byte = int(profile['security']['send_key']['subfunction'], 16)
+                            send_key_payload = bytes([0x27, sf_byte]) + real_key
+                            real_send_key_frames = isotp_encode(send_key_payload, ctx.pad_byte)
+                        elif payload and len(payload) >= 2 and payload[0] == 0x51:
+                            if runtime.post_reset_cleanup_delay > 0:
+                                api.push_trace("EVT", "—", "—",
+                                    f"ECU reset acknowledged; waiting {runtime.post_reset_cleanup_delay:.1f}s")
+                                time.sleep(runtime.post_reset_cleanup_delay)
+
                 except Exception as e:
                     api.push_trace("EVT", "—", "—", f"EXECUTION ERROR at frame {i}: {e}")
+                    bus.shutdown()
                     return False
 
             api.flash_session['progress'] = 100.0
             api.flash_session['flashCount'] += 1
             fc = api.flash_session['flashCount']
             api.nvm_memory["F190"] = [(fc >> 8) & 0xFF, fc & 0xFF]
-            
+
             log_entry = {
                 "id": int(time.time() * 1000),
                 "swFile": name,
@@ -167,19 +291,5 @@ def process_live_flash(profile_path: str, files_data, times):
     api.flash_session['total_progress'] = 100.0
     api.flash_session['eta_seconds'] = 0
     api.flash_session['running'] = False
+    bus.shutdown()
     return True
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Live PCAN Flashing execution using pre-built trace payloads.")
-    parser.add_argument(
-        "--profile",
-        default=DEFAULT_PROFILE,
-        help="Path to OEM profile JSON file.",
-    )
-    return parser.parse_args()
-
-
-if __name__ == "__main__":
-    args = parse_args()
-    sys.exit(process_live_flash(os.path.abspath(args.profile)))

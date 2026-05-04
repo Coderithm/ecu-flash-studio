@@ -71,6 +71,21 @@ def simulate_flash_sequence(files_data, times):
     total_files = len(files_data) * times
     flash_session['total_ops'] = total_files
     
+    # Try to import the real trace builder
+    trace_builder = None
+    try:
+        from core.hex_parsing import (
+            parse_intel_hex_segments, select_flash_segments,
+            build_runtime_context, build_flash_sequence,
+            load_profile, DEFAULT_PROFILE, FIRMWARE_DIR
+        )
+        profile = load_profile(DEFAULT_PROFILE)
+        ctx = build_runtime_context(profile)
+        trace_builder = True
+    except Exception as e:
+        print(f"[BACKEND] Trace builder unavailable ({e}), using basic simulation.")
+        trace_builder = False
+    
     print(f"\n[BACKEND] Validated {len(files_data)} unique file(s) assigned via priority sorted payloads.")
     print(f"[BACKEND] Starting modular sequence {times}x (Total flashes: {total_files})...\n")
     
@@ -85,48 +100,67 @@ def simulate_flash_sequence(files_data, times):
             op_start = int(time.time() * 1000)
             global_completed = (t * len(files_data)) + idx
             
-            steps = 20
+            # Try to build real trace from hex file
+            trace_frames = None
+            if trace_builder:
+                try:
+                    import os
+                    hex_path = os.path.join(FIRMWARE_DIR, fname)
+                    if os.path.exists(hex_path):
+                        segments = parse_intel_hex_segments(hex_path)
+                        selected = select_flash_segments(segments, ctx)
+                        trace_frames = build_flash_sequence(selected, ctx)
+                        print(f"[BACKEND] Built real trace for {fname}: {len(trace_frames)} frames")
+                except Exception as e:
+                    print(f"[BACKEND] Trace build failed for {fname}: {e}")
+                    trace_frames = None
             
-            push_trace("TX", "7DF", "02 10 83 00 00 00 00 00", "DiagSessionControl (0x10) - Extended (functional, suppressPosRsp)")
-            push_trace("TX", "7DF", "02 85 82 00 00 00 00 00", "ControlDTCSetting (0x85) - OFF (functional, suppressPosRsp)")
-            push_trace("TX", "7DF", "03 28 83 03 00 00 00 00", "CommunicationControl (0x28) - OFF (functional, suppressPosRsp)")
-            push_trace("TX", "740", "02 27 05 00 00 00 00 00", "SecurityAccess (0x27) - Request Seed L3")
-            push_trace("RX", "748", "0A 67 05 12 34 56 78 9A BC DE F0", "SecurityAccess seed response (0x67)")
-            push_trace("TX", "740", "10 0A 27 06 AA BB CC DD", "SecurityAccess (0x27) - Send Key FF")
-            push_trace("RX", "748", "30 00 00 00 00 00 00 00", "FlowControl")
-            push_trace("RX", "748", "02 67 06 00 00 00 00 00", "SecurityAccess unlock response (0x67)")
-            push_trace("TX", "740", "02 10 02 00 00 00 00 00", "DiagSessionControl (0x10) - Programming")
-            push_trace("RX", "748", "06 50 02 00 32 01 F4 00", "DiagSessionControl positive response (0x50)")
-            push_trace("TX", "740", "06 31 01 02 00 01 00 00", "RoutineControl (0x31) - Set Boot Flag")
-            push_trace("RX", "748", "04 71 01 02 00 00 00 00", "RoutineControl response (0x71)")
-            push_trace("TX", "740", "05 31 01 FF 00 02 00 00", "RoutineControl (0x31) - Erase Memory")
-            push_trace("RX", "748", "04 71 01 FF 00 00 00 00", "RoutineControl erase response (0x71)")
-            push_trace("TX", "740", "10 0B 34 00 44 00 00 00", "RequestDownload (0x34) FF")
-            push_trace("RX", "748", "30 00 00 00 00 00 00 00", "FlowControl")
-            push_trace("RX", "748", "04 74 20 10 03 00 00 00", "RequestDownload response (0x74)")
-            push_trace("EVT", "—", "—", "UDS Flash Sequence Started")
-            
-            for step in range(steps):
-                time.sleep(0.12)  # Simulate chunk write delays
+            if trace_frames:
+                # Replay REAL trace frames
+                total_steps = len(trace_frames)
+                push_trace("EVT", "—", "—", f"Replaying {total_steps} frames from {fname}")
                 
-                bsc = ((step + 1) % 256)
-                push_trace("TX", "740", f"36 {bsc:02X} AA BB CC DD EE FF", f"TransferData (0x36) - Block {step+1}")
-                if step % 2 == 0:
-                     push_trace("RX", "748", f"02 76 {bsc:02X} 00 00 00 00 00", "TransferData positive response (0x76)")
-                
-                p = (step / steps) * 100.0
-                flash_session['progress'] = p
-                flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
-                
-                # Master Progress logic
-                current_fraction = (global_completed + (step / steps)) / total_files
-                flash_session['total_progress'] = current_fraction * 100.0
-                
-                # ETA calc
-                elapsed_total = time.time() - flash_session['master_start']
-                if current_fraction > 0:
-                    total_expected = elapsed_total / current_fraction
-                    flash_session['eta_seconds'] = int(total_expected - elapsed_total)
+                for step, frame in enumerate(trace_frames):
+                    # Pace the simulation (fast but visible)
+                    if step % 50 == 0:
+                        time.sleep(0.01)
+                    
+                    dir_label = "TX" if frame.direction == "Tx" else "RX"
+                    data_hex = ' '.join(f'{b:02X}' for b in frame.data)
+                    push_trace(dir_label, frame.can_id.upper(), data_hex, frame.comment)
+                    
+                    # Update progress
+                    p = (step / total_steps) * 100.0
+                    flash_session['progress'] = p
+                    flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
+                    
+                    current_fraction = (global_completed + (step / total_steps)) / total_files
+                    flash_session['total_progress'] = current_fraction * 100.0
+                    
+                    elapsed_total = time.time() - flash_session['master_start']
+                    if current_fraction > 0:
+                        total_expected = elapsed_total / current_fraction
+                        flash_session['eta_seconds'] = int(total_expected - elapsed_total)
+            else:
+                # Fallback: basic 20-step simulation
+                steps = 20
+                push_trace("EVT", "—", "—", f"Basic simulation for {fname} (hex file not in firmware/)")
+                for step in range(steps):
+                    time.sleep(0.12)
+                    bsc = ((step + 1) % 256)
+                    push_trace("TX", "740", f"36 {bsc:02X} AA BB CC DD EE FF", f"TransferData (0x36) - Block {step+1}")
+                    if step % 2 == 0:
+                         push_trace("RX", "748", f"02 76 {bsc:02X} 00 00 00 00 00", "TransferData positive response (0x76)")
+                    
+                    p = (step / steps) * 100.0
+                    flash_session['progress'] = p
+                    flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
+                    current_fraction = (global_completed + (step / steps)) / total_files
+                    flash_session['total_progress'] = current_fraction * 100.0
+                    elapsed_total = time.time() - flash_session['master_start']
+                    if current_fraction > 0:
+                        total_expected = elapsed_total / current_fraction
+                        flash_session['eta_seconds'] = int(total_expected - elapsed_total)
             
             flash_session['progress'] = 100.0
             flash_session['flashCount'] += 1
@@ -304,3 +338,87 @@ def start_interruption_test(test_id):
         t.start()
         return True
     return False
+
+
+def get_ecu_config():
+    """Read CAN IDs from the active profile."""
+    try:
+        from core.hex_parsing import load_profile, DEFAULT_PROFILE
+        profile = load_profile(DEFAULT_PROFILE)
+        can_cfg = profile.get("can", {})
+        return {
+            "can_tx": can_cfg.get("request_id", "—").upper(),
+            "can_rx": can_cfg.get("response_id", "—").upper(),
+            "functional_id": can_cfg.get("functional_id", "—").upper(),
+            "protocol": profile.get("meta", {}).get("protocol", "UDS_on_CAN"),
+            "oem": profile.get("meta", {}).get("oem", "Unknown"),
+            "profile_name": profile.get("meta", {}).get("name", "Unknown"),
+        }
+    except Exception as e:
+        return {"can_tx": "—", "can_rx": "—", "error": str(e)}
+
+
+def read_sw_version():
+    """Attempt to read SW version from a live ECU. Returns error if no ECU connected."""
+    try:
+        import can as can_lib
+        bus = can_lib.interface.Bus(interface='pcan', channel='PCAN_USBBUS1', bitrate=500000)
+        # Try reading DID F1 80 (SW Version)
+        request = can_lib.Message(
+            arbitration_id=0x740,
+            data=[0x03, 0x22, 0xF1, 0x80, 0x00, 0x00, 0x00, 0x00],
+            is_extended_id=False
+        )
+        bus.send(request)
+        response = bus.recv(2.0)
+        bus.shutdown()
+        if response and response.data[1] == 0x62:
+            version_bytes = response.data[4:8]
+            version = ''.join(chr(b) for b in version_bytes if 0x20 <= b <= 0x7E)
+            return {"status": "ok", "version": version or "Unknown"}
+        return {"status": "error", "error": "No valid response from ECU", "version": None}
+    except ImportError:
+        return {"status": "error", "error": "No ECU connected (python-can not installed)", "version": None}
+    except Exception as e:
+        return {"status": "error", "error": f"No ECU connected", "version": None}
+
+
+def export_trc():
+    """Export the CAN trace log as PEAK .trc format (version 1.1)."""
+    if not can_trace_log:
+        return None
+
+    lines = []
+    lines.append(";$FILEVERSION=1.1")
+    lines.append(f";$STARTTIME={time.strftime('%Y-%m-%dT%H:%M:%S')}")
+    lines.append(";")
+    lines.append(";   Message Number) Time ID Flags DLC Data")
+    lines.append(";")
+
+    msg_num = 1
+    start_time = can_trace_log[0]["id"] if can_trace_log else time.time()
+
+    for entry in can_trace_log:
+        if entry.get("dir") == "EVT":
+            # Event entries become comments in TRC
+            lines.append(f";   {entry.get('note', '')}")
+            continue
+
+        # Calculate relative timestamp in milliseconds
+        relative_ms = (entry["id"] - start_time) * 1000.0
+
+        can_id = entry.get("canId", "000").replace("—", "000")
+        direction = "Rx" if entry.get("dir") == "RX" else "Tx"
+
+        data_str = entry.get("data", "").replace("—", "")
+        data_bytes = data_str.split() if data_str.strip() else []
+        dlc = len(data_bytes)
+        data_field = " ".join(data_bytes) if data_bytes else ""
+
+        line = f"  {msg_num:>6})  {relative_ms:>12.1f}  {can_id:>8}  {direction}   {dlc}  {data_field}"
+        if entry.get("note"):
+            line += f"   ; {entry['note']}"
+        lines.append(line)
+        msg_num += 1
+
+    return "\r\n".join(lines) + "\r\n"

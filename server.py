@@ -55,6 +55,33 @@ class PurePythonRouter(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"trace": core.api_routes.can_trace_log}).encode("utf-8"))
             return
+        elif parsed.path == '/api/ecu_config':
+            from core.api_routes import get_ecu_config
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(get_ecu_config()).encode("utf-8"))
+            return
+        elif parsed.path == '/api/ecu_read_sw':
+            from core.api_routes import read_sw_version
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(read_sw_version()).encode("utf-8"))
+            return
+        elif parsed.path == '/api/export_trc':
+            from core.api_routes import export_trc
+            trc_content = export_trc()
+            if trc_content is None:
+                self.send_response(204)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-type", "application/octet-stream")
+            self.send_header("Content-Disposition", "attachment; filename=flash_trace.trc")
+            self.end_headers()
+            self.wfile.write(trc_content.encode("utf-8"))
+            return
         elif self.path.startswith('/static/'):
             return super().do_GET()
         

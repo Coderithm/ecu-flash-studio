@@ -47,7 +47,7 @@ window.NvmData = function() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <h2 style={{ color: "#f1f5f9", margin: 0, fontSize: 20, fontWeight: 700 }}>NVM Data</h2>
+      <h2 style={{ color: "var(--text-primary)", margin: 0, fontSize: 20, fontWeight: 700 }}>NVM Data</h2>
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
         <window.Card>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
@@ -55,22 +55,22 @@ window.NvmData = function() {
             <window.MonoInput value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter…" style={{ width: 130 }} />
             <window.Btn onClick={readAll} disabled={reading}>{reading ? "Reading…" : "Read All"}</window.Btn>
           </div>
-          {!data && !reading && <div style={{ textAlign: "center", color: "#475569", fontSize: 13, padding: 30 }}>Click "Read All" to fetch NVM data from ECU.</div>}
-          {reading && <div className="animate-pulse" style={{ textAlign: "center", color: "#475569", fontSize: 13, padding: 30 }}>Reading NVM from ECU…</div>}
+          {!data && !reading && <div style={{ textAlign: "center", color: "#64748B", fontSize: 13, padding: 30 }}>Click "Read All" to fetch NVM data from ECU.</div>}
+          {reading && <div className="animate-pulse" style={{ textAlign: "center", color: "#64748B", fontSize: 13, padding: 30 }}>Reading NVM from ECU…</div>}
           {data && (
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
-                <tr style={{ color: "#64748b", borderBottom: "1px solid #334155" }}>
+                <tr style={{ color: "#64748B", borderBottom: "1px solid #E2E8F0" }}>
                   {["Address","Label","Value","Raw Bytes"].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 12px 6px 0", fontWeight: 500, fontSize: 11 }}>{h}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {filtered.map(r => (
-                  <tr key={r.address} style={{ borderBottom: "1px solid rgba(51,65,85,0.4)", color: "#cbd5e1" }}>
-                    <td style={{ padding: "7px 12px 7px 0", fontFamily: "monospace", fontSize: 11, color: "#93c5fd" }}>{r.address}</td>
+                  <tr key={r.address} style={{ borderBottom: "1px solid #E2E8F0", color: "var(--text-primary)" }}>
+                    <td style={{ padding: "7px 12px 7px 0", fontFamily: "monospace", fontSize: 11, color: "var(--accent-blue)" }}>{r.address}</td>
                     <td style={{ padding: "7px 12px 7px 0", fontSize: 12 }}>{r.label}</td>
                     <td style={{ padding: "7px 12px 7px 0", fontFamily: "monospace", fontSize: 11, color: "#6ee7b7" }}>{r.value}</td>
-                    <td style={{ padding: "7px 0", fontFamily: "monospace", fontSize: 11, color: "#64748b" }}>{r.raw}</td>
+                    <td style={{ padding: "7px 0", fontFamily: "monospace", fontSize: 11, color: "#64748B" }}>{r.raw}</td>
                   </tr>
                 ))}
               </tbody>
@@ -80,22 +80,22 @@ window.NvmData = function() {
         <window.Card style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <window.SectionLabel>Write NVM</window.SectionLabel>
           <div>
-            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Address</div>
+            <div style={{ fontSize: 11, color: "#64748B", marginBottom: 4 }}>Address</div>
             <window.MonoInput value={writeAddr} onChange={e => setWriteAddr(e.target.value)} placeholder="0x0000" />
           </div>
           <div>
-            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Value</div>
+            <div style={{ fontSize: 11, color: "#64748B", marginBottom: 4 }}>Value</div>
             <window.MonoInput value={writeVal} onChange={e => setWriteVal(e.target.value)} placeholder="0xABCD" />
           </div>
           <window.Btn onClick={writeNVM} disabled={!writeAddr || !writeVal} color="#92400e" style={{ width: "100%" }}>Write NVM</window.Btn>
-          <div style={{ borderTop: "1px solid #334155", paddingTop: 10 }}>
-            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>Write Log</div>
+          <div style={{ borderTop: "1px solid #E2E8F0", paddingTop: 10 }}>
+            <div style={{ fontSize: 11, color: "#64748B", marginBottom: 6 }}>Write Log</div>
             {writeLog.length === 0
-              ? <div style={{ fontSize: 11, color: "#475569" }}>No writes yet.</div>
+              ? <div style={{ fontSize: 11, color: "#64748B" }}>No writes yet.</div>
               : writeLog.map((e, i) => (
-                <div key={i} style={{ fontSize: 11, fontFamily: "monospace", color: "#94a3b8", borderBottom: "1px solid rgba(51,65,85,0.5)", padding: "4px 0" }}>
-                  <span style={{ color: "#475569" }}>{e.ts.split(" ")[1]}</span>{" "}
-                  <span style={{ color: "#93c5fd" }}>{e.addr}</span>{" ← "}
+                <div key={i} style={{ fontSize: 11, fontFamily: "monospace", color: "#64748B", borderBottom: "1px solid #E2E8F0", padding: "4px 0" }}>
+                  <span style={{ color: "#64748B" }}>{e.ts.split(" ")[1]}</span>{" "}
+                  <span style={{ color: "var(--accent-blue)" }}>{e.addr}</span>{" ← "}
                   <span style={{ color: "#6ee7b7" }}>{e.val}</span>
                 </div>
               ))

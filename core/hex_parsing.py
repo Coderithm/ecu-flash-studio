@@ -546,32 +546,79 @@ def load_seed_key_function(profile: dict):
 
     # --- DLL-based seed-key ---
     if algo_type == "dll":
-        dll_path = algorithm.get("dll_path", "")
-        if not dll_path:
-            raise ValueError(
-                "Security algorithm type is 'dll' but 'dll_path' is not set. "
-                "Set the path to the OEM security DLL in the profile."
-            )
-        if not os.path.isfile(dll_path):
-            raise FileNotFoundError(f"Security DLL not found: {dll_path}")
+        configured_dll_path = algorithm.get("dll_path", "")
+        dll_function_name = algorithm.get("dll_function", "")
+        if not configured_dll_path or not dll_function_name:
+            return None
 
-        dll_function_name = algorithm.get("dll_function", "ComputeKey")
-        seed_length = int(profile["security"].get("seed_length", 8))
+        def _resolve_dll_path() -> str:
+            dll_path = configured_dll_path
+            if os.path.isabs(dll_path):
+                return dll_path
+            search_paths = [
+                os.path.join(ROOT_DIR, dll_path),
+                os.path.join(PROFILE_DIR, dll_path),
+                os.path.join(PLUGIN_DIR, dll_path),
+            ]
+            return next((path for path in search_paths if os.path.isfile(path)), search_paths[0])
+
         key_length = int(profile["security"].get("key_length", 8))
+        success_codes = algorithm.get("success_codes")
+        signature = algorithm.get("signature", "seed_len_key_len").lower()
+        loaded_function = None
 
-        dll = ctypes.CDLL(dll_path)
-        try:
-            dll_func = getattr(dll, dll_function_name)
-        except AttributeError as exc:
-            raise AttributeError(
-                f"DLL {dll_path} does not export function '{dll_function_name}'"
-            ) from exc
+        def _load_dll_function():
+            nonlocal loaded_function
+            if loaded_function is not None:
+                return loaded_function
+
+            dll_path = _resolve_dll_path()
+            if not os.path.isfile(dll_path):
+                raise FileNotFoundError(
+                    f"Security DLL not found: {dll_path}. "
+                    f"Place '{configured_dll_path}' in {ROOT_DIR} or use an absolute dll_path."
+                )
+
+            calling_convention = algorithm.get("calling_convention", "cdecl").lower()
+            dll_loader = ctypes.WinDLL if calling_convention == "stdcall" else ctypes.CDLL
+            dll = dll_loader(dll_path)
+            try:
+                dll_func = getattr(dll, dll_function_name)
+            except AttributeError as exc:
+                raise AttributeError(
+                    f"DLL {dll_path} does not export function '{dll_function_name}'"
+                ) from exc
+
+            if signature == "seed_key":
+                dll_func.argtypes = [
+                    ctypes.POINTER(ctypes.c_ubyte),
+                    ctypes.POINTER(ctypes.c_ubyte),
+                ]
+            else:
+                dll_func.argtypes = [
+                    ctypes.POINTER(ctypes.c_ubyte),
+                    ctypes.c_uint32,
+                    ctypes.POINTER(ctypes.c_ubyte),
+                    ctypes.c_uint32,
+                ]
+            restype = algorithm.get("return_type", "int").lower()
+            dll_func.restype = None if restype == "void" else ctypes.c_int
+            loaded_function = dll_func
+            return loaded_function
 
         def _dll_compute_key(seed: bytes) -> bytes:
-            seed_buf = ctypes.create_string_buffer(seed, len(seed))
-            key_buf = ctypes.create_string_buffer(key_length)
-            dll_func(seed_buf, len(seed), key_buf, key_length)
-            return key_buf.raw[:key_length]
+            dll_func = _load_dll_function()
+            seed_buf = (ctypes.c_ubyte * len(seed)).from_buffer_copy(seed)
+            key_buf = (ctypes.c_ubyte * key_length)()
+            if signature == "seed_key":
+                result = dll_func(seed_buf, key_buf)
+            else:
+                result = dll_func(seed_buf, len(seed), key_buf, key_length)
+            if success_codes is not None and result not in success_codes:
+                raise RuntimeError(
+                    f"Security DLL function '{dll_function_name}' returned error code {result}"
+                )
+            return bytes(key_buf)
 
         return _dll_compute_key
 
@@ -698,9 +745,19 @@ def profile_service_payload(service_cfg: dict, service_key: str, response_key: s
     return request, response
 
 
-def build_security_key(ctx: RuntimeContext, seed: bytes) -> bytes:
+def build_security_key(ctx: RuntimeContext, seed: bytes, allow_placeholder: bool = False) -> bytes:
+    if allow_placeholder and ctx.profile["security"].get("algorithm", {}).get("type", "").lower() == "dll":
+        return bytes(int(ctx.profile["security"].get("key_length", len(seed))))
+
     if ctx.seed_key_function is None:
-        return seed
+        if ctx.profile["security"].get("enabled") is not True:
+            return seed
+        if allow_placeholder:
+            return bytes(int(ctx.profile["security"].get("key_length", len(seed))))
+        raise ValueError(
+            "Security is enabled but no seed-key function is configured. "
+            "Set security.algorithm.dll_path and security.algorithm.dll_function in the profile."
+        )
 
     key = ctx.seed_key_function(seed)
     if not isinstance(key, (bytes, bytearray)):
@@ -896,7 +953,7 @@ def build_flash_sequence(segments: list[MemorySegment], ctx: RuntimeContext) -> 
 
         elif step == "security_send_key" and security_cfg.get("enabled"):
             seed = bytes.fromhex(ctx.profile.get("_runtime_seed", ""))
-            key = build_security_key(ctx, seed)
+            key = build_security_key(ctx, seed, allow_placeholder=True)
             request_payload = bytes(
                 [
                     _require_hex_byte(send_key_cfg["service"], "security.send_key.service"),

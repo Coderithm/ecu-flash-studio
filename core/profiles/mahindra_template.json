@@ -31,8 +31,8 @@
       "service": "10",
       "subfunction": "03",
       "positive_response": "50",
-      "addressing": "functional",
-      "suppress_positive_response": true
+      "addressing": "physical",
+      "suppress_positive_response": false
     },
     "programming_session": {
       "service": "10",
@@ -205,6 +205,21 @@
     "positive_response": "54",
     "group_of_dtc": "ffffff"
   },
+  "read_after_flash": {
+    "enabled": true,
+    "placement": "after_control_dtc_setting_enable",
+    "service": "22",
+    "positive_response": "62",
+    "dids": [
+      "f181",
+      "f182",
+      "f180",
+      "f187"
+    ],
+    "decode": "ascii",
+    "value_length": 4,
+    "operation_timeout_ms": 5000
+  },
   "timing": {
     "frame_interval_ms": 1,
     "p2_timeout_ms": 50,
@@ -220,6 +235,19 @@
     "checksum_delay_ms": 100,
     "history_zone_delay_ms": 0,
     "clear_dtc_delay_ms": 0
+  },
+  "live": {
+    "external_request_ids": [
+      "740",
+      "7df"
+    ],
+    "fail_on_external_tester_traffic": true,
+    "drain_before_critical_requests": true,
+    "post_reset_cleanup_delay_ms": 5000,
+    "bus_idle_before_clear_dtc_ms": 1000,
+    "bus_idle_max_wait_ms": 5000,
+    "clear_dtc_retry_delay_ms": 3000,
+    "clear_dtc_retries": 2
   },
   "memory": {
     "separate_segments": true,
@@ -241,13 +269,13 @@
     "security_send_key",
     "programming_session",
     "set_boot_flag",
+    "update_history_zone",
     "access_timing_parameters",
     "erase_memory",
     "request_download",
     "transfer_data",
     "transfer_exit",
     "checksum_verify",
-    "update_history_zone",
     "clear_boot_flag",
     "ecu_reset",
     "communication_control_enable",

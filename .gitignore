@@ -26,3 +26,8 @@ Desktop.ini
 
 # Logs
 *.log
+
+# Generated flash outputs
+*.asc
+*.trc
+core/firmware/*.csv

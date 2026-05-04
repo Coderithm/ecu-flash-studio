@@ -20,16 +20,16 @@ window.InterruptionTests = function({ flashOp, sessionLog }) {
 
   return (
     <window.Container>
-      <h2 style={{ color: "#f1f5f9", margin: 0, fontSize: 20, fontWeight: 700 }}>Flashing Interruption Tests</h2>
+      <h2 style={{ color: "var(--text-primary)", margin: 0, fontSize: 20, fontWeight: 700 }}>Flashing Interruption Tests</h2>
 
       {lastResult && (
         <div style={{ background: lastResult.interrupted ? "rgba(234,88,12,0.1)" : "rgba(220,38,38,0.1)", border: `1px solid ${lastResult.interrupted ? "#ea580c" : "#dc2626"}`, borderRadius: 12, padding: 16, display: "flex", alignItems: "center", gap: 14 }}>
           <span style={{ fontSize: 30 }}>{lastResult.interrupted ? "⚡" : "✗"}</span>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 13, color: lastResult.interrupted ? "#fdba74" : "#fca5a5" }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: lastResult.interrupted ? "#fdba74" : "#DC2626" }}>
               {lastResult.interrupted ? "Interruption Detected — ECU Responded Correctly" : "Flash Failed — No Interruption Detected"}
             </div>
-            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
+            <div style={{ fontSize: 11, color: "#64748B", marginTop: 2 }}>
               {lastResult.interrupted ? "Negative Response (NRC 0x70 / 0x72) received — interruption test PASSED" : "Unexpected failure — check ECU logs"}
             </div>
           </div>
@@ -40,15 +40,15 @@ window.InterruptionTests = function({ flashOp, sessionLog }) {
         <div style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.3)", borderRadius: 12, padding: 16, display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 24 }}>✅</span>
           <div>
-            <div style={{ color: "#34d399", fontWeight: 700, fontSize: 13 }}>Positive Response</div>
-            <div style={{ fontSize: 11, color: "#94a3b8" }}>0x78 / 0x67 — Flash completed successfully</div>
+            <div style={{ color: "#059669", fontWeight: 700, fontSize: 13 }}>Positive Response</div>
+            <div style={{ fontSize: 11, color: "#64748B" }}>0x78 / 0x67 — Flash completed successfully</div>
           </div>
         </div>
         <div style={{ background: "rgba(220,38,38,0.08)", border: "1px solid rgba(220,38,38,0.3)", borderRadius: 12, padding: 16, display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 24 }}>❌</span>
           <div>
-            <div style={{ color: "#f87171", fontWeight: 700, fontSize: 13 }}>Negative Response</div>
-            <div style={{ fontSize: 11, color: "#94a3b8" }}>NRC 0x70 / 0x72 — Flash failed or interrupted</div>
+            <div style={{ color: "#DC2626", fontWeight: 700, fontSize: 13 }}>Negative Response</div>
+            <div style={{ fontSize: 11, color: "#64748B" }}>NRC 0x70 / 0x72 — Flash failed or interrupted</div>
           </div>
         </div>
       </div>
@@ -60,21 +60,21 @@ window.InterruptionTests = function({ flashOp, sessionLog }) {
         </div>
         {running && flashOp.swFile && flashOp.swFile.includes("Interruption") && (
           <div style={{ marginBottom: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#94a3b8", marginBottom: 4 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748B", marginBottom: 4 }}>
               <span>Running {flashOp.swFile}…</span><span>{Math.round(progress)}%</span>
             </div>
-            <div style={{ width: "100%", background: "#334155", borderRadius: 9999, height: 8 }}>
+            <div style={{ width: "100%", background: "#E2E8F0", borderRadius: 9999, height: 8 }}>
               <div style={{ width: `${progress}%`, height: 8, background: "#f97316", borderRadius: 9999, transition: "width 0.25s" }} />
             </div>
           </div>
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {tests.map(t => (
-            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, background: "#0f172a", borderRadius: 8, padding: "10px 14px", border: "1px solid #334155" }}>
-              <span style={{ fontSize: 11, color: "#475569", width: 16 }}>{t.id}</span>
-              <span style={{ flex: 1, fontSize: 13, color: "#cbd5e1" }}>{t.name}</span>
+            <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, background: "#F8FAFC", borderRadius: 8, padding: "10px 14px", border: "1px solid #E2E8F0" }}>
+              <span style={{ fontSize: 11, color: "#64748B", width: 16 }}>{t.id}</span>
+              <span style={{ flex: 1, fontSize: 13, color: "var(--text-primary)" }}>{t.name}</span>
               <window.Badge type={running && flashOp.swFile && flashOp.swFile.includes(t.name) ? "running" : t.status} />
-              <window.Btn onClick={() => runTest(t.id)} disabled={running} color="#334155" style={{ padding: "4px 12px", fontSize: 11 }}>Run</window.Btn>
+              <window.Btn onClick={() => runTest(t.id)} disabled={running} color="#E2E8F0" style={{ padding: "4px 12px", fontSize: 11 }}>Run</window.Btn>
             </div>
           ))}
         </div>
@@ -84,13 +84,13 @@ window.InterruptionTests = function({ flashOp, sessionLog }) {
         <window.SectionLabel>Recent Flash Results</window.SectionLabel>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
-            <tr style={{ color: "#64748b", borderBottom: "1px solid #334155" }}>
+            <tr style={{ color: "#64748B", borderBottom: "1px solid #E2E8F0" }}>
               {["SW File","Timestamp","Duration","Result"].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 12px 6px 0", fontWeight: 500, fontSize: 11 }}>{h}</th>)}
             </tr>
           </thead>
           <tbody>
             {sessionLog.slice(0, 6).map(e => (
-              <tr key={e.id} style={{ borderBottom: "1px solid rgba(51,65,85,0.4)", color: "#cbd5e1" }}>
+              <tr key={e.id} style={{ borderBottom: "1px solid #E2E8F0", color: "var(--text-primary)" }}>
                 <td style={{ padding: "7px 12px 7px 0", fontFamily: "monospace", fontSize: 11 }}>{e.swFile}</td>
                 <td style={{ padding: "7px 12px 7px 0", fontSize: 11 }}>{e.timestamp}</td>
                 <td style={{ padding: "7px 12px 7px 0" }}>{e.duration}</td>

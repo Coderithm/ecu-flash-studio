@@ -3,15 +3,26 @@ import csv
 import os
 import sys
 
-from hex_parsing import (
-    parse_intel_hex_segments,
-    select_flash_segments,
-    build_runtime_context,
-    build_flash_sequence,
-    load_profile,
-    DEFAULT_PROFILE,
-    FIRMWARE_DIR
-)
+try:
+    from core.hex_parsing import (
+        parse_intel_hex_segments,
+        select_flash_segments,
+        build_runtime_context,
+        build_flash_sequence,
+        load_profile,
+        DEFAULT_PROFILE,
+        FIRMWARE_DIR
+    )
+except ImportError:
+    from hex_parsing import (
+        parse_intel_hex_segments,
+        select_flash_segments,
+        build_runtime_context,
+        build_flash_sequence,
+        load_profile,
+        DEFAULT_PROFILE,
+        FIRMWARE_DIR
+    )
 
 def process_to_csv(profile_path: str):
     profile = load_profile(profile_path)
