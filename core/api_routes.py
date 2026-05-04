@@ -205,6 +205,21 @@ def _run_flash_engine(files, times):
 
 def start_multiflash(files, times):
     if not flash_session['running'] and len(files) > 0:
+        # Save uploaded base64 files to FIRMWARE_DIR so live flasher can find them
+        try:
+            import os
+            from core.hex_parsing import FIRMWARE_DIR
+            os.makedirs(FIRMWARE_DIR, exist_ok=True)
+            for f in files:
+                name = f.get('name')
+                data_b64 = f.get('data_b64')
+                if name and data_b64:
+                    filepath = os.path.join(FIRMWARE_DIR, name)
+                    with open(filepath, "wb") as out_file:
+                        out_file.write(base64.b64decode(data_b64))
+        except Exception as e:
+            print(f"[BACKEND] Error saving uploaded files: {e}")
+
         flash_session['running'] = True
         t = threading.Thread(target=_run_flash_engine, args=(files, times))
         t.daemon = True
@@ -361,26 +376,44 @@ def get_ecu_config():
 def read_sw_version():
     """Attempt to read SW version from a live ECU. Returns error if no ECU connected."""
     try:
+        from core.hex_parsing import load_profile, DEFAULT_PROFILE, build_runtime_context
+        from core.can_live_flasher import build_live_runtime, read_did_live
         import can as can_lib
+        
+        profile = load_profile(DEFAULT_PROFILE)
+        ctx = build_runtime_context(profile)
+        runtime = build_live_runtime(profile, ctx)
+        
         bus = can_lib.interface.Bus(interface='pcan', channel='PCAN_USBBUS1', bitrate=500000)
-        # Try reading DID F1 80 (SW Version)
-        request = can_lib.Message(
-            arbitration_id=0x740,
-            data=[0x03, 0x22, 0xF1, 0x80, 0x00, 0x00, 0x00, 0x00],
-            is_extended_id=False
-        )
-        bus.send(request)
-        response = bus.recv(2.0)
+        expected_rx_id = int(ctx.response_id, 16)
+        tx_can_id_int = int(ctx.request_id, 16)
+        
+        read_cfg = profile.get("read_after_flash", {})
+        dids = read_cfg.get("dids", ["f180"])
+        operation_timeout = int(read_cfg.get("operation_timeout_ms", 5000)) / 1000.0
+        decode_mode = read_cfg.get("decode", "ascii")
+        value_length = int(read_cfg.get("value_length", 0))
+        accepted_dids = {bytes.fromhex(str(did)) for did in dids}
+        
+        version = None
+        for did in dids:
+            value = read_did_live(
+                bus, runtime, tx_can_id_int, expected_rx_id,
+                str(did), ctx.pad_byte, operation_timeout, "SW Version",
+                decode_mode, value_length, accepted_dids
+            )
+            if value:
+                version = value
+                break
+                
         bus.shutdown()
-        if response and response.data[1] == 0x62:
-            version_bytes = response.data[4:8]
-            version = ''.join(chr(b) for b in version_bytes if 0x20 <= b <= 0x7E)
-            return {"status": "ok", "version": version or "Unknown"}
+        if version:
+            return {"status": "ok", "version": version}
         return {"status": "error", "error": "No valid response from ECU", "version": None}
     except ImportError:
         return {"status": "error", "error": "No ECU connected (python-can not installed)", "version": None}
     except Exception as e:
-        return {"status": "error", "error": f"No ECU connected", "version": None}
+        return {"status": "error", "error": f"No ECU connected: {e}", "version": None}
 
 
 def export_trc():
