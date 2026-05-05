@@ -9,7 +9,7 @@ import json
 import time
 import urllib.parse
 
-from core.api_routes import get_flash_status, start_multiflash, read_nvm, write_nvm, get_nvm_map, update_nvm_map
+from core.api_routes import get_flash_status, start_multiflash, stop_multiflash, read_nvm, write_nvm, get_nvm_map, update_nvm_map, export_trc_for_file
 from frontend.html_core import HTML_WRAPPER
 from frontend.module_utils import UTILS_JSX
 from frontend.module_sidebar import SIDEBAR_JSX
@@ -82,6 +82,26 @@ class PurePythonRouter(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(trc_content.encode("utf-8"))
             return
+        elif parsed.path == '/api/export_trc_file':
+            qs = urllib.parse.parse_qs(parsed.query)
+            log_id_str = qs.get('log_id', [''])[0]
+            try:
+                log_id = int(log_id_str)
+            except (ValueError, TypeError):
+                self.send_response(400)
+                self.end_headers()
+                return
+            trc_content = export_trc_for_file(log_id)
+            if trc_content is None:
+                self.send_response(204)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-type", "application/octet-stream")
+            self.send_header("Content-Disposition", f"attachment; filename=trace_{log_id}.trc")
+            self.end_headers()
+            self.wfile.write(trc_content.encode("utf-8"))
+            return
         elif self.path.startswith('/static/'):
             return super().do_GET()
         
@@ -107,6 +127,13 @@ class PurePythonRouter(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "started"}).encode("utf-8"))
+            return
+        elif parsed.path == '/api/stop_multiflash':
+            res = stop_multiflash()
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode('utf-8'))
             return
         elif parsed.path == '/api/nvm_write':
             content_length = int(self.headers['Content-Length'])

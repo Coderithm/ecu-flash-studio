@@ -34,7 +34,7 @@ HTML_WRAPPER = """<!DOCTYPE html>
   * { box-sizing: border-box; }
   
   :root {
-    --mahle-red: #E30613;
+    --mahle-red: #0ea5e9;
     --mahle-dark: #1A1A2E;
     --mahle-navy: #0D1B3E;
     --bg-main: #F4F6F9;
@@ -45,7 +45,7 @@ HTML_WRAPPER = """<!DOCTYPE html>
     --text-primary: #1E293B;
     --text-secondary: #64748B;
     --text-muted: #94A3B8;
-    --accent-primary: #E30613;
+    --accent-primary: #0ea5e9;
     --accent-blue: #1E40AF;
   }
 

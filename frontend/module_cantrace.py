@@ -11,18 +11,19 @@ window.CanTrace = function({ flashOp }) {
 
   const opRunning = !!flashOp?.running;
   const [chartData, setChartData] = useState(Array(40).fill(0));
+  const [displayLoad, setDisplayLoad] = useState(0);
+  const canLoadRef = useRef(0);
+  const prevTraceLen = useRef(0);
 
   useEffect(() => {
-    if (!opRunning) {
-      setChartData(Array(40).fill(0));
-      return;
-    } else {
-      const iv = setInterval(() => {
-        setChartData(prev => [...prev.slice(1), 40 + Math.random() * 50]);
-      }, 100);
-      return () => clearInterval(iv);
-    }
-  }, [opRunning]);
+    const iv = setInterval(() => {
+      let v = canLoadRef.current;
+      if (v > 0) v = Math.max(0, Math.min(100, v + (Math.random() * 4 - 2)));
+      setDisplayLoad(v);
+      setChartData(prev => [...prev.slice(1), v]);
+    }, 100);
+    return () => clearInterval(iv);
+  }, []);
 
   // Poll for traces separately
   useEffect(() => {
@@ -30,11 +31,18 @@ window.CanTrace = function({ flashOp }) {
       try {
         const res = await fetch('/api/can_trace');
         const st = await res.json();
-        setCanTrace(st.trace || []);
+        const newTrace = st.trace || [];
+        setCanTrace(newTrace);
+        
+        const dFrames = Math.max(0, newTrace.length - prevTraceLen.current);
+        prevTraceLen.current = newTrace.length;
+        
+        canLoadRef.current = Math.min(100, dFrames / 20); // roughly max 2000 frames/500ms at 500kbps
+        if (!opRunning && dFrames === 0) canLoadRef.current = 0;
       } catch(e) { }
     }, 500);
     return () => clearInterval(iv);
-  }, []);
+  }, [opRunning]);
 
   const filtered = canTrace.filter(f => {
     if (!showTX && f.dir === "TX") return false;
@@ -76,7 +84,7 @@ window.CanTrace = function({ flashOp }) {
 
   const getRowStyle = (f) => {
     const data = (f.data || "").toUpperCase();
-    if (data.startsWith("7F")) return { background: "rgba(239, 68, 68, 0.15)", borderLeft: "4px solid #ef4444" };
+    if (data.startsWith("7F")) return { background: "rgba(14, 165, 233, 0.08)", borderLeft: "4px solid #0ea5e9" }; // Sky Blue for NRCs
     if (data.startsWith("27")) return { background: "rgba(251, 191, 36, 0.08)", borderLeft: "4px solid #fbbf24" };
     if (data.startsWith("36") || data.startsWith("34")) return { background: "rgba(59, 130, 246, 0.08)", borderLeft: "4px solid var(--accent-primary)" };
     if (data.startsWith("3E")) return { opacity: 0.6 };
@@ -88,22 +96,35 @@ window.CanTrace = function({ flashOp }) {
       <h2 style={{ color: "var(--text-primary)", margin: 0, fontSize: 24, fontWeight: 800 }}>Full CAN Trace</h2>
 
       <window.Card style={{ marginBottom: 16 }}>
-        <window.SectionLabel>Real-Time CAN Bus Load</window.SectionLabel>
-        <div style={{ height: 60, position: "relative", marginBottom: 8, background: "#F8FAFC", borderRadius: 8, overflow: "hidden", border: "1px solid #E2E8F0" }}>
-          <svg width="100%" height="100%" viewBox="0 0 400 100" preserveAspectRatio="none">
-            <defs>
-              <linearGradient id="waveGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="var(--accent-primary)" stopOpacity="0.2" />
-                <stop offset="100%" stopColor="var(--accent-primary)" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            <path d={`M 0 100 ${chartData.map((v, i) => `L ${i * 10} ${100 - v}`).join(' ')} L 400 100 Z`} fill="url(#waveGrad)" stroke="none" />
-            <path d={chartData.map((v, i) => `${i === 0 ? 'M' : 'L'} ${i * 10} ${100 - v}`).join(' ')} fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>Simulated Data Rate</div>
-          <div style={{ fontSize: 14, fontWeight: 800, color: "var(--accent-primary)", fontFamily: "monospace" }}>{opRunning ? (450 + Math.random() * 50).toFixed(1) : "0.0"} <span style={{ fontSize: 9, color: "#64748B" }}>fps</span></div>
+        <window.SectionLabel>Real-Time CAN Bus Load (500 kbps)</window.SectionLabel>
+        <div style={{ display: "flex", gap: 16, alignItems: "stretch", height: 80 }}>
+          {/* Left: Line Graph */}
+          <div style={{ flex: 1, position: "relative", background: "#F8FAFC", borderRadius: 8, overflow: "hidden", border: "1px solid #E2E8F0" }}>
+            <div style={{ position: "absolute", left: 6, top: 4, fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>100%</div>
+            <div style={{ position: "absolute", left: 6, bottom: 4, fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>0%</div>
+            <svg width="100%" height="100%" viewBox="0 0 400 100" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="waveGradGreen" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#10b981" stopOpacity="0.2" />
+                  <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              <path d={`M 0 100 ${chartData.map((v, i) => `L ${i * 10} ${100 - v}`).join(' ')} L 400 100 Z`} fill="url(#waveGradGreen)" stroke="none" />
+              <path d={chartData.map((v, i) => `${i === 0 ? 'M' : 'L'} ${i * 10} ${100 - v}`).join(' ')} fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </div>
+
+          {/* Right: Tank Filler */}
+          <div style={{ width: 60, display: "flex", flexDirection: "column", gap: 6, alignItems: "center", justifyContent: "center" }}>
+            <div style={{ height: 50, width: 24, background: "#E2E8F0", borderRadius: 4, overflow: "hidden", position: "relative", boxShadow: "inset 0 2px 4px rgba(0,0,0,0.1)" }}>
+              <div style={{ 
+                position: "absolute", bottom: 0, left: 0, right: 0, 
+                height: `${displayLoad}%`, background: "#0ea5e9", 
+                transition: "height 0.1s linear" 
+              }} />
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 800, color: "#0ea5e9", fontFamily: "monospace" }}>{displayLoad.toFixed(1)}%</div>
+          </div>
         </div>
       </window.Card>
 
@@ -126,7 +147,7 @@ window.CanTrace = function({ flashOp }) {
           <div style={{ display: "flex", gap: 6 }}>
             <window.Btn onClick={copyLog} color="#E2E8F0">Copy</window.Btn>
             <window.Btn onClick={exportLog} color="#E2E8F0">Export</window.Btn>
-            <window.Btn onClick={clearAll} color="#7f1d1d">Clear</window.Btn>
+            <window.Btn onClick={clearAll} color="#0ea5e9">Clear</window.Btn>
           </div>
         </div>
       </window.Card>
@@ -156,7 +177,7 @@ window.CanTrace = function({ flashOp }) {
                       <span style={{ padding: "2px 6px", borderRadius: 4, background: f.dir === "TX" ? "rgba(253, 230, 138, 0.1)" : "rgba(110, 231, 183, 0.1)", color: window.dirColor(f.dir), fontWeight: 800, fontSize: 10 }}>{f.dir}</span>
                     </td>
                     <td style={{ padding: "10px 14px", fontFamily: "monospace", color: "var(--accent-primary)", fontWeight: 700 }}>{f.canId}</td>
-                    <td style={{ padding: "10px 14px", fontFamily: "monospace", color: f.data.startsWith("7F") ? "#DC2626" : "var(--text-primary)", letterSpacing: "0.05em" }}>{f.data}</td>
+                    <td style={{ padding: "10px 14px", fontFamily: "monospace", color: f.data.startsWith("7F") ? "#0ea5e9" : "var(--text-primary)", letterSpacing: "0.05em" }}>{f.data}</td>
                     <td style={{ padding: "10px 14px", fontSize: 11, color: "#64748B", fontStyle: f.note ? "normal" : "italic" }}>{f.note || "—"}</td>
                   </tr>
                 ))

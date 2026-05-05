@@ -169,7 +169,7 @@ window.Dashboard = function({ flashOp, flashCount, ecuConfig, sessionLog }) {
           <div style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: swVersion === "—" ? "#64748B" : "var(--accent-primary)", background: "#F1F5F9", borderRadius: 8, padding: "6px 10px", marginBottom: 6, minHeight: 30, display: "flex", alignItems: "center", border: "1px solid #E2E8F0" }}>
             {reading ? <span className="animate-pulse" style={{ color: "#64748B" }}>Reading ECU…</span> : swVersion}
           </div>
-          {swError && <div style={{ fontSize: 10, color: "#DC2626", marginBottom: 6, fontFamily: "monospace" }}>{swError}</div>}
+          {swError && <div style={{ fontSize: 10, color: "#0284c7", marginBottom: 6, fontFamily: "monospace" }}>{swError}</div>}
           <window.Btn onClick={readSW} disabled={reading} style={{ width: "100%", padding: "6px" }}>Read SW Version</window.Btn>
         </window.Card>
 
@@ -225,7 +225,7 @@ window.Dashboard = function({ flashOp, flashCount, ecuConfig, sessionLog }) {
                 <div key={i} style={{ display: "flex", gap: 12, padding: "6px 12px", borderBottom: "1px solid #E2E8F0", fontSize: 11, fontFamily: "monospace", background: i === 0 ? "rgba(0,0,0,0.02)" : "transparent" }}>
                   <span style={{ color: "#64748B", width: 130, flexShrink: 0 }}>{e.ts}</span>
                   <span style={{ color: "#B45309" }}>TX: {e.cmd}</span>
-                  <span style={{ color: e.response ? (e.response.startsWith("7F") ? "#DC2626" : "#047857") : "#64748B" }}>
+                  <span style={{ color: e.response ? (e.response.startsWith("7F") ? "#0284c7" : "#047857") : "#64748B" }}>
                     {e.response ? `RX: ${e.response}` : "…waiting"}
                   </span>
                 </div>
@@ -242,7 +242,7 @@ window.Dashboard = function({ flashOp, flashCount, ecuConfig, sessionLog }) {
          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
             <div style={{ fontSize: 11, color: "#64748B" }}>Status</div>
-            <div style={{ fontSize: 11, color: nvmErr ? "#DC2626" : (nvmWriting ? "#fde68a" : "#64748B") }}>
+            <div style={{ fontSize: 11, color: nvmErr ? "#0284c7" : (nvmWriting ? "#fde68a" : "#64748B") }}>
               {nvmErr ? nvmErr : (nvmWriting ? "Writing…" : (nvmReading ? "Reading…" : (nvmWriteStatus || "Idle")))}
             </div>
           </div>

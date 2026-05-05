@@ -104,16 +104,23 @@ def process_live_flash(profile_path: str, files_data, times):
     api.flash_session['total_ops'] = total_files
 
     for t in range(times):
+        if api.flash_session.get('force_stop'): break
         for idx, name in enumerate(hex_files):
+            if api.flash_session.get('force_stop'): break
             api.flash_session['current_op'] += 1
             api.flash_session['swFile'] = name
             api.flash_session['progress'] = 0.0
             op_start = int(time.time() * 1000)
             global_completed = (t * len(hex_files)) + idx
 
+            # Start per-file trace capture
+            api._current_file_trace.clear()
+            api._current_file_trace_id = True
+
             hex_path = os.path.join(FIRMWARE_DIR, name)
             if not os.path.exists(hex_path):
                 api.push_trace("EVT", "—", "—", f"File not found: {hex_path}")
+                api._current_file_trace_id = None
                 continue
 
             parsed_segments = parse_intel_hex_segments(hex_path)
@@ -154,6 +161,7 @@ def process_live_flash(profile_path: str, files_data, times):
                         if runtime.drain_before_critical and is_critical_request(send_data):
                             if not drain_bus(bus, runtime, f"before {frame.comment or 'request'}"):
                                 api.push_trace("EVT", "—", "—", "FAIL: External tester traffic detected.")
+                                api._current_file_trace_id = None
                                 bus.shutdown()
                                 return False
 
@@ -166,6 +174,7 @@ def process_live_flash(profile_path: str, files_data, times):
                         if is_clear_dtc_request(msg):
                             if not wait_for_bus_idle(bus, runtime, "ClearDTC"):
                                 api.push_trace("EVT", "—", "—", "FAIL: Bus not idle before ClearDTC.")
+                                api._current_file_trace_id = None
                                 bus.shutdown()
                                 return False
 
@@ -188,6 +197,7 @@ def process_live_flash(profile_path: str, files_data, times):
                             fc_msg = wait_for_flow_control(bus, expected_rx_id, runtime, timeout=1.0)
                             if not fc_msg:
                                 api.push_trace("EVT", "—", "—", "FAIL: Timeout waiting for FlowControl from ECU.")
+                                api._current_file_trace_id = None
                                 bus.shutdown()
                                 return False
                             fc_data_hex = ' '.join(f'{b:02X}' for b in fc_msg.data)
@@ -220,6 +230,7 @@ def process_live_flash(profile_path: str, files_data, times):
                                     time.sleep(runtime.clear_dtc_retry_delay)
                                     if is_clear_dtc_request(last_tx_msg):
                                         if not wait_for_bus_idle(bus, runtime, "ClearDTC retry"):
+                                            api._current_file_trace_id = None
                                             bus.shutdown()
                                             return False
                                     send_live(bus, last_tx_msg, runtime)
@@ -234,11 +245,13 @@ def process_live_flash(profile_path: str, files_data, times):
                                 if not rx_msg:
                                     expected_hex = ' '.join(f'{b:02X}' for b in frame.data)
                                     api.push_trace("EVT", "—", "—", f"FAIL: Timeout after retry. Expected: {expected_hex}")
+                                    api._current_file_trace_id = None
                                     bus.shutdown()
                                     return False
                             else:
                                 expected_hex = ' '.join(f'{b:02X}' for b in frame.data)
                                 api.push_trace("EVT", "—", "—", f"FAIL: Timeout waiting for ECU response: {expected_hex}")
+                                api._current_file_trace_id = None
                                 bus.shutdown()
                                 return False
 
@@ -248,6 +261,7 @@ def process_live_flash(profile_path: str, files_data, times):
                         negative_response = describe_negative_response(rx_msg.payload)
                         if negative_response:
                             api.push_trace("EVT", "—", "—", f"FAIL: ECU negative response: {negative_response}")
+                            api._current_file_trace_id = None
                             bus.shutdown()
                             return False
 
@@ -271,6 +285,7 @@ def process_live_flash(profile_path: str, files_data, times):
 
                 except Exception as e:
                     api.push_trace("EVT", "—", "—", f"EXECUTION ERROR at frame {i}: {e}")
+                    api._current_file_trace_id = None
                     bus.shutdown()
                     return False
 
@@ -279,14 +294,23 @@ def process_live_flash(profile_path: str, files_data, times):
             fc = api.flash_session['flashCount']
             api.nvm_memory["F190"] = [(fc >> 8) & 0xFF, fc & 0xFF]
 
+            log_id = int(time.time() * 1000)
+            elapsed_ms = api.flash_session['elapsedMs']
             log_entry = {
-                "id": int(time.time() * 1000),
+                "id": log_id,
                 "swFile": name,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "duration": f"{api.flash_session['elapsedMs'] // 1000}.{(api.flash_session['elapsedMs'] % 1000)//100}s",
-                "status": "success"
+                "duration": f"{elapsed_ms // 1000}.{(elapsed_ms % 1000)//100}s",
+                "duration_ms": elapsed_ms,
+                "status": "success",
+                "has_trace": True
             }
             api.flash_session['sessionLog'].insert(0, log_entry)
+
+            # Save per-file trace snapshot
+            api.flash_traces[log_id] = list(api._current_file_trace)
+            api._current_file_trace.clear()
+            api._current_file_trace_id = None
 
     api.flash_session['total_progress'] = 100.0
     api.flash_session['eta_seconds'] = 0

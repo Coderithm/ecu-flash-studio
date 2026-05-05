@@ -13,6 +13,7 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
   
   const [times, setTimes] = useState(1);
   const running = flashOp?.running || false;
+  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
 
   const prevSessionLogRef = useRef(0);
 
@@ -58,19 +59,147 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
     fetch('/api/start_multiflash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: filesData, times: times }) });
   }
 
+  async function stopFlashing() {
+    await fetch('/api/stop_multiflash', { method: 'POST' });
+  }
+
   const opsCount = buildOps().length; const canStart = !running && opsCount > 0;
   const successCount = sessionLog.filter(e => e.status === "success").length;
   const failCount = sessionLog.filter(e => e.status === "failed").length;
 
   const opRunning = !!flashOp?.running;
-  const opPct = Math.min(100, Math.max(0, flashOp?.progress ?? 0));
-  const opElapsed = flashOp?.elapsedMs ?? 0;
-  const opCycle = flashOp?.cycle ?? 0;
-  const opTotal = flashOp?.total ?? 0;
-  const opFile = flashOp?.swFile ?? "—";
   
   const totalLogTimeSec = sessionLog.reduce((acc, log) => acc + (parseFloat(log.duration) || 0), 0);
   const totalLogTimeStr = window.fmtMs ? window.fmtMs(totalLogTimeSec * 1000) : `${totalLogTimeSec.toFixed(1)}s`;
+  const avgTimeSec = sessionLog.length > 0 ? (totalLogTimeSec / sessionLog.length) : 0;
+  const avgTimeStr = sessionLog.length > 0 ? (window.fmtMs ? window.fmtMs(avgTimeSec * 1000) : `${avgTimeSec.toFixed(1)}s`) : "\u2014";
+
+  // Scatter graph rendering
+  const canvasRef = useRef(null);
+  const wrapperRef = useRef(null);
+
+  useEffect(() => {
+    const ro = new ResizeObserver(entries => {
+      for (let entry of entries) {
+        setCanvasSize({ w: entry.contentRect.width, h: entry.contentRect.height });
+      }
+    });
+    if (wrapperRef.current) ro.observe(wrapperRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || canvasSize.w === 0) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    const W = rect.width;
+    const H = rect.height;
+    
+    ctx.clearRect(0, 0, W, H);
+    
+    // Draw background grid
+    ctx.strokeStyle = '#E2E8F0';
+    ctx.lineWidth = 0.5;
+    const gridLines = [30, 60, 90, 120];
+    const maxY = 150;
+    for (const gl of gridLines) {
+      const y = H - (gl / maxY) * (H - 24) - 2;
+      ctx.beginPath();
+      ctx.moveTo(40, y);
+      ctx.lineTo(W - 8, y);
+      ctx.stroke();
+      ctx.fillStyle = '#94A3B8';
+      ctx.font = '9px Inter, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${gl}s`, 36, y + 3);
+    }
+    
+    // Draw Y axis base
+    ctx.fillStyle = '#94A3B8';
+    ctx.font = '9px Inter, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('0s', 36, H - 2);
+    
+    // Plot data points (oldest first = left to right)
+    const data = [...sessionLog].reverse();
+    if (data.length === 0) {
+      ctx.fillStyle = '#94A3B8';
+      ctx.font = '11px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('No flash data yet', W / 2, H / 2);
+      return;
+    }
+    
+    const usableW = W - 48;
+    const spacing = data.length > 1 ? usableW / (data.length - 1) : 0;
+    
+    for (let i = 0; i < data.length; i++) {
+      const e = data[i];
+      const durSec = parseFloat(e.duration) || (e.duration_ms ? e.duration_ms / 1000 : 0);
+      const x = data.length === 1 ? W / 2 : 44 + i * spacing;
+      const y = H - (Math.min(durSec, maxY) / maxY) * (H - 24) - 2;
+      
+      let color;
+      if (durSec < 30) color = '#10b981';
+      else if (durSec < 60) color = '#f59e0b';
+      else color = '#38bdf8';
+      
+      // Glow
+      ctx.beginPath();
+      ctx.arc(x, y, 8, 0, Math.PI * 2);
+      ctx.fillStyle = color + '30';
+      ctx.fill();
+      
+      // Dot
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+    
+    // Draw legend (top-right)
+    const legendY = 10;
+    const legends = [
+      { color: '#10b981', label: '< 30s' },
+      { color: '#f59e0b', label: '30-60s' },
+      { color: '#38bdf8', label: '> 60s' }
+    ];
+    let lx = W - 8;
+    ctx.font = '9px Inter, sans-serif';
+    for (let li = legends.length - 1; li >= 0; li--) {
+      const l = legends[li];
+      const tw = ctx.measureText(l.label).width;
+      lx -= tw;
+      ctx.fillStyle = '#64748B';
+      ctx.textAlign = 'left';
+      ctx.fillText(l.label, lx, legendY + 4);
+      lx -= 12;
+      ctx.beginPath();
+      ctx.arc(lx + 4, legendY, 4, 0, Math.PI * 2);
+      ctx.fillStyle = l.color;
+      ctx.fill();
+      lx -= 8;
+    }
+  }, [sessionLog, canvasSize]);
+
+  async function downloadTrace(logId, fileName) {
+    try {
+      const res = await fetch(`/api/export_trc_file?log_id=${logId}`);
+      if (res.status === 204) { alert('No trace data for this flash'); return; }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${fileName.replace(/\.[^.]+$/, '')}_trace.trc`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch(e) { alert('Failed to download trace'); }
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: -10 }}>
@@ -85,11 +214,11 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12 }}>
         {/* Left Column: Local File Selection */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <window.Card>
+          <window.Card style={{ flex: 1, display: "flex", flexDirection: "column" }}>
             <window.SectionLabel>Local File Selection</window.SectionLabel>
             <div style={{ fontSize: 11, color: "#64748B", marginBottom: 8 }}>Pick files and assign absolute sequence priorities (1-10).</div>
-            <div style={{ border: "1px solid rgba(51,65,85,0.6)", borderRadius: 8, overflow: "hidden", background: "#F8FAFC", marginBottom: 12, marginTop: 8, maxHeight: 220, overflowY: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <div style={{ flex: 1, border: "1px solid rgba(51,65,85,0.6)", borderRadius: 8, overflow: "hidden", background: "#F8FAFC", marginBottom: 12, marginTop: 8, minHeight: 150, overflowY: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                 <thead style={{ position: "sticky", top: 0, background: "#F8FAFC", zIndex: 1 }}><tr style={{ color: "#64748B", borderBottom: "1px solid #E2E8F0" }}><th style={{ width: 30, padding: 4 }}>Use</th><th style={{ width: 60, padding: 4 }}>Sequence</th><th style={{ padding: 4, textAlign: "left" }}>Select Local Hex File</th></tr></thead>
                 <tbody>
                   {plan.map((row, i) => (
@@ -120,13 +249,20 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
                 </div>
               </div>
             </div>
-            <window.Btn onClick={startFlashing} disabled={!canStart} className="w-full py-1 text-[12px]">
-              {running ? `Execution in Progress (${flashOp?.cycle || 0}/${flashOp?.total || 0})...` : "▶ Begin Hardware Flashing"}
-            </window.Btn>
+            <div style={{ display: "flex", gap: 8 }}>
+              <window.Btn onClick={startFlashing} disabled={!canStart} className="py-1 text-[12px]" style={{ flex: 1 }}>
+                {running ? `Execution in Progress (${flashOp?.cycle || 0}/${flashOp?.total || 0})...` : "\u25b6 Begin Hardware Flashing"}
+              </window.Btn>
+              {running && (
+                <window.Btn onClick={stopFlashing} className="py-1 text-[12px]" style={{ background: "#0ea5e9" }}>
+                  \u23f9 Force Stop
+                </window.Btn>
+              )}
+            </div>
           </window.Card>
         </div>
 
-        {/* Right Column: Progress & Current Flash Operation */}
+        {/* Right Column: Progress & Flash Time Scatter */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <window.Card>
             <div style={{ marginBottom: 12 }}>
@@ -138,7 +274,7 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
               <div style={{ width: "100%", background: "#E2E8F0", borderRadius: 9999, height: 8, overflow: "hidden" }}>
                 <div className={running ? "progress-stripes animate-stripe-slide" : ""} style={{ width: `${!running && (flashOp?.total_progress || 0) >= 99.5 ? 100 : Math.max(0, Math.min(100, flashOp?.total_progress || 0))}%`, height: "100%", background: "var(--accent-blue)", transition: "width 0.4s" }} />
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748B", marginTop: 4 }}><span>ETA: <span className={`font-mono font-bold ${opRunning && flashOp?.eta_seconds >= 0 ? "text-emerald-500" : "text-slate-500"}`}>{opRunning ? (flashOp?.eta_seconds >= 0 ? window.fmtMs(flashOp.eta_seconds * 1000) : "Calculating...") : "—"}</span></span><span>Flashes: <span className="font-bold text-slate-400">{flashOp?.cycle || 0}</span> / <span className="font-bold text-slate-400">{flashOp?.total || 0}</span></span></div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748B", marginTop: 4 }}><span>ETA: <span className={`font-mono font-bold ${opRunning && flashOp?.eta_seconds >= 0 ? "text-emerald-500" : "text-slate-500"}`}>{opRunning ? (flashOp?.eta_seconds >= 0 ? window.fmtMs(flashOp.eta_seconds * 1000) : "Calculating...") : "\u2014"}</span></span><span>Flashes: <span className="font-bold text-slate-400">{flashOp?.cycle || 0}</span> / <span className="font-bold text-slate-400">{flashOp?.total || 0}</span></span></div>
             </div>
 
             <div>
@@ -151,30 +287,14 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
             
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, paddingTop: 10, borderTop: "1px solid #E2E8F0" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#059669" }}>Successful: {successCount}</div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#DC2626" }}>Failed: {failCount}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#ef4444" }}>Failed: {failCount}</div>
             </div>
           </window.Card>
 
           <window.Card style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-            <window.SectionLabel>Current Flash Operation</window.SectionLabel>
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-              {!opRunning ? (
-                <div style={{ fontSize: 11, color: "#64748B", padding: "8px 0" }}>No flashing operation running.</div>
-              ) : (
-                <>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-                    <div style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "var(--accent-primary)" }}>{window.fmtMs(opElapsed)}</div>
-                    <div style={{ fontSize: 11, color: "#64748B", fontWeight: 700 }}>{opCycle}/{opTotal}</div>
-                  </div>
-                  <div style={{ width: "100%", background: "#E2E8F0", borderRadius: 9999, height: 8, marginBottom: 8, overflow: "hidden" }}>
-                    <div className="progress-stripes animate-stripe-slide" style={{ width: `${opPct}%`, height: "100%", background: "var(--accent-primary)", transition: "width 0.15s" }} />
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748B" }}>
-                    <span style={{ fontFamily: "monospace", maxWidth: "120px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{opFile}</span>
-                    <span className="font-bold">{Math.round(opPct)}%</span>
-                  </div>
-                </>
-              )}
+            <window.SectionLabel>Flash Time Distribution</window.SectionLabel>
+            <div ref={wrapperRef} style={{ flex: 1, minHeight: 110 }}>
+              <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
             </div>
           </window.Card>
         </div>
@@ -185,31 +305,28 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <window.SectionLabel style={{ margin: 0 }}>Flash Log</window.SectionLabel>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ fontSize: 11, color: "#64748B", fontWeight: 600 }}>Avg Time: <span style={{ color: "#6366f1", fontWeight: 700 }}>{avgTimeStr}</span></div>
             <div style={{ fontSize: 11, color: "#64748B", fontWeight: 600 }}>Total Time: <span style={{ color: "var(--accent-primary)" }}>{totalLogTimeStr}</span></div>
             <div style={{ fontSize: 11, color: "#64748B", fontWeight: 600 }}>Total Flashes: <span style={{ color: "var(--accent-blue)" }}>{sessionLog.length}</span></div>
-            <window.Btn onClick={() => {
-              const csv = ["File Processed,Execution Timestamp,Time Elapsed,Result\n", ...sessionLog.map(e => `${e.swFile},${e.timestamp},${e.duration},${e.status}`)].join('\n');
-              const blob = new Blob([csv], { type: 'text/csv' });
-              const url = window.URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url; a.download = 'flash_log.csv'; a.click();
-            }} style={{ padding: "4px 8px", fontSize: 11 }}>Download Log</window.Btn>
           </div>
         </div>
         <div style={{ border: "1px solid rgba(51,65,85,0.6)", borderRadius: 8, overflow: "hidden", background: "#F8FAFC", maxHeight: 110, overflowY: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead style={{ position: "sticky", top: 0, background: "#F8FAFC", zIndex: 1 }}>
               <tr style={{ color: "#64748B", borderBottom: "1px solid #E2E8F0" }}>
-                {["File Processed", "Execution Timestamp", "Time Elapsed", "Result"].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontWeight: 500 }}>{h}</th>)}
+                {["File Processed", "Execution Timestamp", "Time Elapsed", "Result", "Trace"].map(h => <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontWeight: 500 }}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
-              {sessionLog.length === 0 ? <tr><td colSpan={4} style={{ textAlign: "center", color: "#64748B", padding: "16px", fontSize: 12 }}>Waiting for backend Python events...</td></tr> : sessionLog.map(e => (
+              {sessionLog.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "#64748B", padding: "16px", fontSize: 12 }}>Waiting for backend Python events...</td></tr> : sessionLog.slice(0, 3).map(e => (
                 <tr key={e.id} style={{ borderBottom: "1px solid #E2E8F0" }}>
                   <td style={{ padding: "8px 12px", fontFamily: "monospace", color: "var(--accent-blue)" }}>{e.swFile}</td>
                   <td style={{ padding: "8px 12px", color: "var(--text-primary)" }}>{e.timestamp}</td>
                   <td style={{ padding: "8px 12px", color: "var(--text-primary)" }}>{e.duration}</td>
                   <td style={{ padding: "8px 12px" }}><window.Badge type={e.status} /></td>
+                  <td style={{ padding: "8px 12px" }}>
+                    <button onClick={() => downloadTrace(e.id, e.swFile)} style={{ background: "none", border: "1px solid #CBD5E1", borderRadius: 4, padding: "2px 8px", fontSize: 10, color: "#1E40AF", cursor: "pointer", fontWeight: 600, transition: "all 0.15s" }} title="Download .trc trace for this flash">{"\u2b07"} .trc</button>
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -14,8 +14,9 @@ flash_session = {
     "eta_seconds": -1,
     "flashCount": 0,
     "sessionLog": [],
-    "swFile": "—",
-    "master_start": 0
+    "swFile": "\u2014",
+    "master_start": 0,
+    "force_stop": False
 }
 
 interruption_tests = [
@@ -28,17 +29,24 @@ last_interruption_result = None
 
 can_trace_log = []
 
+# Per-file traces: keyed by log entry id -> list of trace frames
+flash_traces = {}
+_current_file_trace = []
+_current_file_trace_id = None
+
 def push_trace(dir, canId, data, note=""):
-    can_trace_log.append({
+    entry = {
         "id": time.time(),
         "ts": time.strftime("%H:%M:%S.") + f"{int((time.time() % 1) * 1000):03d}",
         "dir": dir,
         "canId": canId,
         "data": data,
         "note": note
-    })
-    if len(can_trace_log) > 5000:
-        can_trace_log.pop(0)
+    }
+    can_trace_log.append(entry)
+    # Also append to per-file trace if capture is active
+    if _current_file_trace_id is not None:
+        _current_file_trace.append(entry)
 
 def clear_trace():
     global can_trace_log
@@ -60,7 +68,7 @@ NVM_DATA_MAP = [
 ]
 
 def simulate_flash_sequence(files_data, times):
-    global flash_session
+    global flash_session, _current_file_trace_id
     flash_session['running'] = True
     flash_session['sessionLog'] = []
     flash_session['current_op'] = 0
@@ -90,12 +98,18 @@ def simulate_flash_sequence(files_data, times):
     print(f"[BACKEND] Starting modular sequence {times}x (Total flashes: {total_files})...\n")
     
     for t in range(times):
+        if flash_session.get('force_stop'): break
         for idx, file_obj in enumerate(files_data):
+            if flash_session.get('force_stop'): break
             fname = file_obj['name']
             
             flash_session['current_op'] += 1
             flash_session['swFile'] = fname
             flash_session['progress'] = 0.0
+            
+            # Start per-file trace capture
+            _current_file_trace.clear()
+            _current_file_trace_id = True
             
             op_start = int(time.time() * 1000)
             global_completed = (t * len(files_data)) + idx
@@ -169,14 +183,23 @@ def simulate_flash_sequence(files_data, times):
             fc = flash_session['flashCount']
             nvm_memory["F190"] = [(fc >> 8) & 0xFF, fc & 0xFF]
             
+            log_id = int(time.time() * 1000)
+            elapsed_ms = flash_session['elapsedMs']
             log_entry = {
-                "id": int(time.time() * 1000),
+                "id": log_id,
                 "swFile": fname,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "duration": f"{flash_session['elapsedMs'] // 1000}.{(flash_session['elapsedMs'] % 1000)//100}s",
-                "status": "success"
+                "duration": f"{elapsed_ms // 1000}.{(elapsed_ms % 1000)//100}s",
+                "duration_ms": elapsed_ms,
+                "status": "success",
+                "has_trace": True
             }
             flash_session['sessionLog'].insert(0, log_entry)
+            
+            # Save per-file trace snapshot
+            flash_traces[log_id] = list(_current_file_trace)
+            _current_file_trace.clear()
+            _current_file_trace_id = None
 
     flash_session['total_progress'] = 100.0
     flash_session['eta_seconds'] = 0
@@ -197,8 +220,30 @@ def _run_flash_engine(files, times):
         # Try physical PCAN flash
         success = flasher.process_live_flash(flasher.DEFAULT_PROFILE, files, times)
         if not success:
-            # Fallback to pure software simulation
-            simulate_flash_sequence(files, times)
+            # Check if live flasher partially ran (some flashes already completed)
+            if flash_session.get('current_op', 0) > 0 and len(flash_session.get('sessionLog', [])) > 0:
+                # Live flasher failed mid-sequence — do NOT restart as simulation
+                # Mark session as stopped with a failure entry
+                print(f"[BACKEND] Live flasher failed after {len(flash_session['sessionLog'])} flash(es). NOT falling back to simulation.")
+                push_trace("EVT", "\u2014", "\u2014", "PCAN hardware error — flashing stopped. Remaining flashes aborted.")
+                log_entry = {
+                    "id": int(time.time() * 1000),
+                    "swFile": flash_session.get('swFile', '\u2014'),
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "duration": "0.0s",
+                    "duration_ms": 0,
+                    "status": "failed",
+                    "has_trace": False
+                }
+                flash_session['sessionLog'].insert(0, log_entry)
+                flash_session['total_progress'] = 100.0
+                flash_session['eta_seconds'] = 0
+                flash_session['running'] = False
+            else:
+                # Live flasher failed before any flashes started (e.g. PCAN init failed)
+                # Safe to fall back to full simulation
+                print(f"[BACKEND] Live flasher failed at init, falling back to simulation.")
+                simulate_flash_sequence(files, times)
     except (ImportError, SystemExit, Exception) as e:
         print(f"[BACKEND] Live flasher unavailable ({e}), falling back to simulation.")
         simulate_flash_sequence(files, times)
@@ -221,11 +266,17 @@ def start_multiflash(files, times):
             print(f"[BACKEND] Error saving uploaded files: {e}")
 
         flash_session['running'] = True
+        flash_session['force_stop'] = False
         t = threading.Thread(target=_run_flash_engine, args=(files, times))
         t.daemon = True
         t.start()
         return True
     return False
+
+def stop_multiflash():
+    if flash_session['running']:
+        flash_session['force_stop'] = True
+    return {"status": "stopping"}
 
 def read_nvm(did):
     did_clean = str(did).replace(" ", "").upper()
@@ -416,9 +467,9 @@ def read_sw_version():
         return {"status": "error", "error": f"No ECU connected: {e}", "version": None}
 
 
-def export_trc():
-    """Export the CAN trace log as PEAK .trc format (version 1.1)."""
-    if not can_trace_log:
+def _build_trc_from_entries(entries):
+    """Build PEAK .trc format (version 1.1) from a list of trace entries."""
+    if not entries:
         return None
 
     lines = []
@@ -429,21 +480,18 @@ def export_trc():
     lines.append(";")
 
     msg_num = 1
-    start_time = can_trace_log[0]["id"] if can_trace_log else time.time()
+    start_time = entries[0]["id"] if entries else time.time()
 
-    for entry in can_trace_log:
+    for entry in entries:
         if entry.get("dir") == "EVT":
-            # Event entries become comments in TRC
             lines.append(f";   {entry.get('note', '')}")
             continue
 
-        # Calculate relative timestamp in milliseconds
         relative_ms = (entry["id"] - start_time) * 1000.0
-
-        can_id = entry.get("canId", "000").replace("—", "000")
+        can_id = entry.get("canId", "000").replace("\u2014", "000")
         direction = "Rx" if entry.get("dir") == "RX" else "Tx"
 
-        data_str = entry.get("data", "").replace("—", "")
+        data_str = entry.get("data", "").replace("\u2014", "")
         data_bytes = data_str.split() if data_str.strip() else []
         dlc = len(data_bytes)
         data_field = " ".join(data_bytes) if data_bytes else ""
@@ -455,3 +503,14 @@ def export_trc():
         msg_num += 1
 
     return "\r\n".join(lines) + "\r\n"
+
+def export_trc():
+    """Export the full CAN trace log as PEAK .trc format."""
+    return _build_trc_from_entries(can_trace_log)
+
+def export_trc_for_file(log_id):
+    """Export the CAN trace for a specific flash operation by its log ID."""
+    entries = flash_traces.get(log_id)
+    if not entries:
+        return None
+    return _build_trc_from_entries(entries)

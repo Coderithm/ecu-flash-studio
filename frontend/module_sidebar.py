@@ -18,7 +18,7 @@ window.Sidebar = function({ active, setActive }) {
       {NAV.map(n => (
         <button key={n.id} onClick={() => setActive(n.id)} 
           className={`flex items-center gap-3 px-3 py-3.5 text-[13px] font-medium rounded-xl cursor-pointer transition-all duration-300 w-full text-left
-          ${active === n.id ? 'bg-red-600/20 text-white border border-red-500/50 shadow-[0_0_15px_rgba(227,6,19,0.2)]' : 'bg-transparent text-slate-300 hover:bg-slate-800/60 hover:text-white border border-transparent'}`}>
+          ${active === n.id ? 'bg-sky-600/20 text-white border border-sky-500/50 shadow-[0_0_15px_rgba(14,165,233,0.2)]' : 'bg-transparent text-slate-300 hover:bg-slate-800/60 hover:text-white border border-transparent'}`}>
           <span className={`text-sm transition-transform duration-300 ${active === n.id ? 'scale-110' : 'opacity-70'}`}>{n.icon}</span>{n.label}
         </button>
       ))}

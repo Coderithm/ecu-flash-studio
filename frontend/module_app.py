@@ -69,7 +69,7 @@ function App() {
           {toasts.map(t => (
             <div key={t.id} className="animate-toast-slide" style={{ background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: 8, padding: "12px 24px", display: "flex", alignItems: "center", gap: 12, minWidth: 250, boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)" }}>
               {t.type === 'success' && <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#10b981", boxShadow: "0 0 10px #10b981" }} />}
-              {t.type === 'error' && <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#ef4444", boxShadow: "0 0 10px #ef4444" }} />}
+              {t.type === 'error' && <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#0ea5e9", boxShadow: "0 0 10px #0ea5e9" }} />}
               {t.type === 'info' && <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#E30613", boxShadow: "0 0 10px #E30613" }} />}
               <span style={{ fontSize: 14, fontWeight: 500, color: "#1E293B" }}>{t.msg}</span>
             </div>

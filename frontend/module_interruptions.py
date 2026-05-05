@@ -23,10 +23,10 @@ window.InterruptionTests = function({ flashOp, sessionLog }) {
       <h2 style={{ color: "var(--text-primary)", margin: 0, fontSize: 20, fontWeight: 700 }}>Flashing Interruption Tests</h2>
 
       {lastResult && (
-        <div style={{ background: lastResult.interrupted ? "rgba(234,88,12,0.1)" : "rgba(220,38,38,0.1)", border: `1px solid ${lastResult.interrupted ? "#ea580c" : "#dc2626"}`, borderRadius: 12, padding: 16, display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ background: lastResult.interrupted ? "rgba(234,88,12,0.1)" : "rgba(2,132,199,0.1)", border: `1px solid ${lastResult.interrupted ? "#ea580c" : "#0284c7"}`, borderRadius: 12, padding: 16, display: "flex", alignItems: "center", gap: 14 }}>
           <span style={{ fontSize: 30 }}>{lastResult.interrupted ? "⚡" : "✗"}</span>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 13, color: lastResult.interrupted ? "#fdba74" : "#DC2626" }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: lastResult.interrupted ? "#fdba74" : "#0284c7" }}>
               {lastResult.interrupted ? "Interruption Detected — ECU Responded Correctly" : "Flash Failed — No Interruption Detected"}
             </div>
             <div style={{ fontSize: 11, color: "#64748B", marginTop: 2 }}>
@@ -47,7 +47,7 @@ window.InterruptionTests = function({ flashOp, sessionLog }) {
         <div style={{ background: "rgba(220,38,38,0.08)", border: "1px solid rgba(220,38,38,0.3)", borderRadius: 12, padding: 16, display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 24 }}>❌</span>
           <div>
-            <div style={{ color: "#DC2626", fontWeight: 700, fontSize: 13 }}>Negative Response</div>
+            <div style={{ color: "#0284c7", fontWeight: 700, fontSize: 13 }}>Negative Response</div>
             <div style={{ fontSize: 11, color: "#64748B" }}>NRC 0x70 / 0x72 — Flash failed or interrupted</div>
           </div>
         </div>

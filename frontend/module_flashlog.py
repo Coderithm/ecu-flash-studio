@@ -48,7 +48,7 @@ window.FlashLog = function({ sessionLog }) {
         {[
           ["Total Flashes", sessionLog.length, "var(--text-primary)"],
           ["✓ Successful", successCnt, "#059669"],
-          ["✗ Failed", failCnt, "#DC2626"],
+          ["\u2717 Failed", failCnt, "#0284c7"],
           ["Total Flash Time", window.fmtMs(totalMs), "var(--accent-blue)"]
         ].map(([label,val,color]) => (
           <window.Card key={label} style={{ textAlign: "center" }}>
