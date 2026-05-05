@@ -1,5 +1,5 @@
 CANTRACE_JSX = r"""
-window.CanTrace = function() {
+window.CanTrace = function({ flashOp }) {
   const { useState, useEffect, useRef } = React;
   const [canTrace, setCanTrace] = useState([]);
   const [q, setQ] = useState("");
@@ -8,6 +8,21 @@ window.CanTrace = function() {
   const [showEVT, setShowEVT] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
   const wrapRef = useRef(null);
+
+  const opRunning = !!flashOp?.running;
+  const [chartData, setChartData] = useState(Array(40).fill(0));
+
+  useEffect(() => {
+    if (!opRunning) {
+      setChartData(Array(40).fill(0));
+      return;
+    } else {
+      const iv = setInterval(() => {
+        setChartData(prev => [...prev.slice(1), 40 + Math.random() * 50]);
+      }, 100);
+      return () => clearInterval(iv);
+    }
+  }, [opRunning]);
 
   // Poll for traces separately
   useEffect(() => {
@@ -71,6 +86,26 @@ window.CanTrace = function() {
   return (
     <window.Container>
       <h2 style={{ color: "var(--text-primary)", margin: 0, fontSize: 24, fontWeight: 800 }}>Full CAN Trace</h2>
+
+      <window.Card style={{ marginBottom: 16 }}>
+        <window.SectionLabel>Real-Time CAN Bus Load</window.SectionLabel>
+        <div style={{ height: 60, position: "relative", marginBottom: 8, background: "#F8FAFC", borderRadius: 8, overflow: "hidden", border: "1px solid #E2E8F0" }}>
+          <svg width="100%" height="100%" viewBox="0 0 400 100" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="waveGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--accent-primary)" stopOpacity="0.2" />
+                <stop offset="100%" stopColor="var(--accent-primary)" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            <path d={`M 0 100 ${chartData.map((v, i) => `L ${i * 10} ${100 - v}`).join(' ')} L 400 100 Z`} fill="url(#waveGrad)" stroke="none" />
+            <path d={chartData.map((v, i) => `${i === 0 ? 'M' : 'L'} ${i * 10} ${100 - v}`).join(' ')} fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>Simulated Data Rate</div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "var(--accent-primary)", fontFamily: "monospace" }}>{opRunning ? (450 + Math.random() * 50).toFixed(1) : "0.0"} <span style={{ fontSize: 9, color: "#64748B" }}>fps</span></div>
+        </div>
+      </window.Card>
 
       <window.Card>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>

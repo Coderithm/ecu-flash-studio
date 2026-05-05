@@ -1,6 +1,6 @@
-DASHBOARD_JSX = """
-window.Dashboard = function({ flashOp, flashCount, ecuConfig }) {
-  const { useState, useEffect } = React;
+DASHBOARD_JSX = r"""
+window.Dashboard = function({ flashOp, flashCount, ecuConfig, sessionLog }) {
+  const { useState, useEffect, useRef } = React;
   const [swVersion, setSwVersion] = useState("—");
   const [swError, setSwError] = useState("");
   const [reading, setReading] = useState(false);
@@ -10,6 +10,91 @@ window.Dashboard = function({ flashOp, flashCount, ecuConfig }) {
   const [cmdLog, setCmdLog] = useState([]);
   const [sending, setSending] = useState(false);
   const QUICK = ["0x10 03", "0x22 F1 80", "0x27 01", "0x31 01 FF 00", "0x3E 00"]; 
+
+  const [nvmSaveCycleDec, setNvmSaveCycleDec] = useState("—");
+  const [nvmSaveCycleHex, setNvmSaveCycleHex] = useState("—");
+  const [nvmLastRead, setNvmLastRead] = useState("—");
+  const [nvmDid, setNvmDid] = useState("F1 90");
+  const [nvmReading, setNvmReading] = useState(false);
+  const [nvmAutoRead, setNvmAutoRead] = useState(true);
+  const [nvmWriteData, setNvmWriteData] = useState("00 00");
+  const [nvmWriting, setNvmWriting] = useState(false);
+  const [nvmWriteStatus, setNvmWriteStatus] = useState("—");
+  const [nvmCounterLog, setNvmCounterLog] = useState([]);
+  const [nvmErr, setNvmErr] = useState("");
+  
+  const prevSessionLogRef = useRef(0);
+
+  useEffect(() => {
+    if (nvmAutoRead && sessionLog && sessionLog.length > prevSessionLogRef.current) {
+        readNvmSaveCycle("Auto (after flash)");
+    }
+    prevSessionLogRef.current = sessionLog ? sessionLog.length : 0;
+  }, [sessionLog, nvmAutoRead]);
+
+  async function readNvmSaveCycle(reason = "Manual") {
+    if (nvmReading) return;
+    const did = (nvmDid || "").trim().toUpperCase();
+    if (!did) { setNvmErr("DID is required"); return; }
+    setNvmErr("");
+    setNvmReading(true);
+
+    try {
+        const res = await fetch('/api/nvm_read?did=' + encodeURIComponent(did));
+        const json = await res.json();
+        
+        let val = 0;
+        let hex = "0x0000";
+        if (json.data && json.data.length >= 2) {
+            val = (json.data[0] << 8) | json.data[1];
+            hex = `0x${val.toString(16).toUpperCase().padStart(4, '0')}`;
+        }
+        
+        setNvmSaveCycleDec(val.toString());
+        setNvmSaveCycleHex(hex);
+        setNvmLastRead(new Date().toLocaleString("en-IN", { hour12: false }).replace(",", ""));
+        setNvmCounterLog(l => [{ ts: new Date().toLocaleString("en-IN", { hour12: false }).replace(",", ""), did, dec: val.toString(), hex, reason }, ...l].slice(0, 200));
+    } catch (e) {
+        setNvmErr("Failed to read");
+    } finally {
+        setNvmReading(false);
+    }
+  }
+
+  function parseHexBytes(str) {
+    const s = (str || '').trim().toUpperCase().replace(/0X/g,'');
+    if (!s) return [];
+    return s.split(/\s+/).filter(Boolean).map(b => {
+      const bb = b.replace(/[^0-9A-F]/g,'');
+      return bb ? parseInt(bb, 16) : NaN;
+    }).filter(x => !Number.isNaN(x));
+  }
+
+  async function writeThenReadNvm(reason = 'Manual') {
+    if (nvmWriting || nvmReading) return;
+    const did = (nvmDid || '').trim().toUpperCase();
+    if (!did) { setNvmErr('DID is required'); return; }
+    const bytes = parseHexBytes(nvmWriteData);
+    if (bytes.length === 0) { setNvmErr('Write data bytes are required'); return; }
+    setNvmErr('');
+    setNvmWriting(true);
+    setNvmWriteStatus('Writing…');
+
+    try {
+        const res = await fetch('/api/nvm_write', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ did, data: bytes })
+        });
+        await res.json();
+        setNvmWriteStatus(`OK`);
+        await readNvmSaveCycle('After write');
+    } catch(e) {
+        setNvmWriteStatus(`Error`);
+    } finally {
+        setNvmWriting(false);
+    }
+  }
 
   const txId = ecuConfig?.can_tx || "—";
   const rxId = ecuConfig?.can_rx || "—";
@@ -74,90 +159,66 @@ window.Dashboard = function({ flashOp, flashCount, ecuConfig }) {
   }, [opRunning]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <h2 style={{ color: "var(--text-primary)", margin: 0, fontSize: 24, fontWeight: 800, letterSpacing: "-0.02em" }}>Dashboard Overview</h2>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: -10 }}>
+      <h2 style={{ color: "var(--text-primary)", margin: 0, fontSize: 22, fontWeight: 700 }}>Dashboard Overview</h2>
       
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         {/* SW Version */}
         <window.Card>
-          <window.SectionLabel>SW Version</window.SectionLabel>
-          <div style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 700, color: swVersion === "—" ? "#64748B" : "var(--accent-primary)", background: "#F1F5F9", borderRadius: 8, padding: "8px 12px", marginBottom: 8, minHeight: 40, display: "flex", alignItems: "center", border: "1px solid #E2E8F0" }}>
+          <window.SectionLabel style={{ marginBottom: 8 }}>SW Version</window.SectionLabel>
+          <div style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: swVersion === "—" ? "#64748B" : "var(--accent-primary)", background: "#F1F5F9", borderRadius: 8, padding: "6px 10px", marginBottom: 6, minHeight: 30, display: "flex", alignItems: "center", border: "1px solid #E2E8F0" }}>
             {reading ? <span className="animate-pulse" style={{ color: "#64748B" }}>Reading ECU…</span> : swVersion}
           </div>
-          {swError && <div style={{ fontSize: 10, color: "#DC2626", marginBottom: 8, fontFamily: "monospace" }}>{swError}</div>}
-          <window.Btn onClick={readSW} disabled={reading} style={{ width: "100%" }}>Read SW Version</window.Btn>
+          {swError && <div style={{ fontSize: 10, color: "#DC2626", marginBottom: 6, fontFamily: "monospace" }}>{swError}</div>}
+          <window.Btn onClick={readSW} disabled={reading} style={{ width: "100%", padding: "6px" }}>Read SW Version</window.Btn>
         </window.Card>
 
-        {/* Flash Count */}
         <window.Card>
-          <window.SectionLabel>Flash Cycle Count</window.SectionLabel>
-          <div style={{ fontFamily: "monospace", fontSize: 42, fontWeight: 800, color: "var(--accent-primary)", background: "#F1F5F9", borderRadius: 8, padding: "4px 12px", marginBottom: 16, textAlign: "center", minHeight: 60, lineHeight: "60px", border: "1px solid #E2E8F0" }}>
-            {flashReading ? <span className="animate-pulse" style={{ fontSize: 16, color: "#64748B", fontWeight: 400 }}>Reading…</span> : localFC}
+          <window.SectionLabel style={{ marginBottom: 8 }}>Flash Cycle Count</window.SectionLabel>
+          <div style={{ fontFamily: "monospace", fontSize: 32, fontWeight: 800, color: "var(--accent-primary)", background: "#F1F5F9", borderRadius: 8, padding: "2px 10px", marginBottom: 12, textAlign: "center", minHeight: 40, lineHeight: "40px", border: "1px solid #E2E8F0" }}>
+            {flashReading ? <span className="animate-pulse" style={{ fontSize: 14, color: "#64748B", fontWeight: 400 }}>Reading…</span> : localFC}
           </div>
-          <window.Btn onClick={readFC} disabled={flashReading} color="#065f46" style={{ width: "100%" }}>Read Flash Count</window.Btn>
+          <window.Btn onClick={readFC} disabled={flashReading} color="#065f46" style={{ width: "100%", padding: "6px" }}>Read Flash Count</window.Btn>
         </window.Card>
 
         {/* ECU Status */}
         <window.Card>
-          <window.SectionLabel>ECU Status</window.SectionLabel>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <window.SectionLabel style={{ marginBottom: 8 }}>ECU Status</window.SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Session</span>
-              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Extended Diagnostic</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)" }}>Extended Diagnostic</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Protocol</span>
-              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>UDS over CAN</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)" }}>UDS over CAN</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>CAN ID (TX)</span>
-              <span style={{ fontFamily: "monospace", fontSize: 14, color: "var(--accent-primary)", fontWeight: 700 }}>0x{txId}</span>
+              <span style={{ fontFamily: "monospace", fontSize: 13, color: "var(--accent-primary)", fontWeight: 700 }}>0x{txId}</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>CAN ID (RX)</span>
-              <span style={{ fontFamily: "monospace", fontSize: 14, color: "var(--accent-primary)", fontWeight: 700 }}>0x{rxId}</span>
+              <span style={{ fontFamily: "monospace", fontSize: 13, color: "var(--accent-primary)", fontWeight: 700 }}>0x{rxId}</span>
             </div>
           </div>
         </window.Card>
-
-        {/* Current Flashing Operation Time */}
-        <window.Card>
-          <window.SectionLabel>Current Flash Operation</window.SectionLabel>
-
-          {!opRunning ? (
-            <div style={{ fontSize: 12, color: "#64748B", padding: "8px 0" }}>No flashing operation running.</div>
-          ) : (
-            <>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-                <div style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800, color: "var(--accent-primary)" }}>{window.fmtMs(opElapsed)}</div>
-                <div style={{ fontSize: 11, color: "#64748B", fontWeight: 700 }}>{opCycle}/{opTotal}</div>
-              </div>
-              <div style={{ width: "100%", background: "#E2E8F0", borderRadius: 9999, height: 10, marginBottom: 8, overflow: "hidden", position: "relative" }}>
-                <div className="progress-stripes animate-stripe-slide" style={{ width: `${opPct}%`, height: 10, background: "var(--accent-primary)", borderRadius: 9999, transition: "width 0.15s" }} />
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748B" }}>
-                <span style={{ fontFamily: "monospace" }}>{opFile}</span>
-                <span className="font-bold">{Math.round(opPct)}%</span>
-              </div>
-            </>
-          )}
-        </window.Card>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
         {/* Application Command */}
         <window.Card>
-          <window.SectionLabel>Application Command</window.SectionLabel>
-          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-            <input value={cmd} onChange={e => setCmd(e.target.value)} onKeyDown={e => e.key === "Enter" && sendCmd()} placeholder="e.g. 0x10 03 or 22 F1 80" style={{ flex: 1, background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontFamily: "monospace", color: "#1E293B", outline: "none", transition: "border-color 0.15s" }} />
-            <window.Btn onClick={sendCmd} disabled={sending || !cmd.trim()}>{sending ? "Sending…" : "Send"}</window.Btn>
+          <window.SectionLabel style={{ marginBottom: 8 }}>Application Command</window.SectionLabel>
+          <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+            <input value={cmd} onChange={e => setCmd(e.target.value)} onKeyDown={e => e.key === "Enter" && sendCmd()} placeholder="e.g. 0x10 03 or 22 F1 80" style={{ flex: 1, background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontFamily: "monospace", color: "#1E293B", outline: "none", transition: "border-color 0.15s" }} />
+            <window.Btn onClick={sendCmd} disabled={sending || !cmd.trim()} style={{ padding: "6px 12px" }}>{sending ? "Sending…" : "Send"}</window.Btn>
           </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
             {QUICK.map(c => (
-              <button key={c} onClick={() => setCmd(c)} style={{ background: "#F1F5F9", color: "#475569", border: "1px solid #E2E8F0", borderRadius: 6, padding: "3px 8px", fontSize: 11, fontFamily: "monospace", cursor: "pointer", transition: "all 0.15s" }}>{c}</button>
+              <button key={c} onClick={() => setCmd(c)} style={{ background: "#F1F5F9", color: "#475569", border: "1px solid #E2E8F0", borderRadius: 6, padding: "2px 6px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", transition: "all 0.15s" }}>{c}</button>
             ))}
           </div>
-          <div style={{ background: "#F8FAFC", borderRadius: 8, border: "1px solid #E2E8F0", maxHeight: 180, overflowY: "auto" }}>
+          <div style={{ background: "#F8FAFC", borderRadius: 8, border: "1px solid #E2E8F0", maxHeight: 110, overflowY: "auto" }}>
             {cmdLog.length === 0
               ? <div style={{ padding: 12, fontSize: 11, color: "#64748B" }}>No commands sent yet.</div>
               : cmdLog.map((e, i) => (
@@ -172,38 +233,92 @@ window.Dashboard = function({ flashOp, flashCount, ecuConfig }) {
             }
           </div>
         </window.Card>
+      </div>
 
-        {/* CAN Bus Load Visualization */}
+      {/* NVM Data Section */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <window.Card>
-          <window.SectionLabel>Real-Time CAN Bus Load</window.SectionLabel>
-          <div style={{ height: 120, position: "relative", marginBottom: 12, background: "#F8FAFC", borderRadius: 12, overflow: "hidden", border: "1px solid #E2E8F0" }}>
-            <svg width="100%" height="100%" viewBox="0 0 400 100" preserveAspectRatio="none">
-              <defs>
-                <linearGradient id="waveGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--accent-primary)" stopOpacity="0.2" />
-                  <stop offset="100%" stopColor="var(--accent-primary)" stopOpacity="0" />
-                </linearGradient>
-              </defs>
-              <path 
-                d={`M 0 100 ${chartData.map((v, i) => `L ${i * 10} ${100 - v}`).join(' ')} L 400 100 Z`}
-                fill="url(#waveGrad)"
-                stroke="none"
-              />
-              <path 
-                d={chartData.map((v, i) => `${i === 0 ? 'M' : 'L'} ${i * 10} ${100 - v}`).join(' ')}
-                fill="none"
-                stroke="var(--accent-primary)"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>Simulated Data Rate</div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: "var(--accent-primary)", fontFamily: "monospace" }}>
-              {opRunning ? (450 + Math.random() * 50).toFixed(1) : "0.0"} <span style={{ fontSize: 10, color: "#64748B" }}>fps</span>
+         <window.SectionLabel style={{ marginBottom: 8 }}>NVM save cycle — Write (0x2E) then Read (0x22)</window.SectionLabel>
+         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <div style={{ fontSize: 11, color: "#64748B" }}>Status</div>
+            <div style={{ fontSize: 11, color: nvmErr ? "#DC2626" : (nvmWriting ? "#fde68a" : "#64748B") }}>
+              {nvmErr ? nvmErr : (nvmWriting ? "Writing…" : (nvmReading ? "Reading…" : (nvmWriteStatus || "Idle")))}
             </div>
           </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 10, color: "#64748B", marginBottom: 2 }}>DID</div>
+              <input value={nvmDid} onChange={e => setNvmDid(e.target.value)} placeholder="F1 90" disabled={nvmReading || nvmWriting} style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontFamily: "monospace", color: "var(--text-primary)", outline: "none", width: "100%" }} />
+              <div style={{ fontSize: 9, color: "#64748B", marginTop: 4 }}>Write TX: <span style={{ fontFamily: "monospace" }}>2E {nvmDid || "F1 90"} &lt;data…&gt;</span></div>
+              <div style={{ fontSize: 9, color: "#64748B", marginTop: 2 }}>Read TX: <span style={{ fontFamily: "monospace" }}>22 {nvmDid || "F1 90"}</span></div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "#64748B", marginBottom: 2 }}>Write Data (bytes)</div>
+              <input value={nvmWriteData} onChange={e => setNvmWriteData(e.target.value)} placeholder="00 0A" disabled={nvmReading || nvmWriting} style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontFamily: "monospace", color: "var(--text-primary)", outline: "none", width: "100%" }} />
+              <div style={{ fontSize: 9, color: "#64748B", marginTop: 4 }}>Example: <span style={{ fontFamily: "monospace" }}>00 0A</span></div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 2 }}>
+            <window.Btn onClick={() => writeThenReadNvm('Manual')} disabled={nvmReading || nvmWriting} color="#6d28d9" style={{ width: "100%", padding: "6px" }}>
+              {nvmWriting ? "Writing…" : "Write + Read"}
+            </window.Btn>
+            <window.Btn onClick={() => readNvmSaveCycle('Manual')} disabled={nvmReading || nvmWriting} color="#065f46" style={{ width: "100%", padding: "6px" }}>
+              {nvmReading ? "Reading…" : "Read Only"}
+            </window.Btn>
+            <window.Btn onClick={() => { setNvmSaveCycleDec("—"); setNvmSaveCycleHex("—"); setNvmLastRead("—"); setNvmErr(""); setNvmWriteStatus("—"); }} disabled={nvmReading || nvmWriting} color="#E2E8F0" style={{ width: "100%", padding: "6px" }}>
+              Clear
+            </window.Btn>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 4 }}>
+            <div style={{ background: "rgba(167,139,250,0.08)", borderRadius: 10, padding: 8, border: "1px solid rgba(167,139,250,0.25)" }}>
+              <div style={{ fontSize: 9, color: "#64748B", marginBottom: 4 }}>Decimal</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: "#a78bfa", lineHeight: 1, fontFamily: "monospace" }}>{nvmSaveCycleDec}</div>
+            </div>
+            <div style={{ background: "rgba(59,130,246,0.08)", borderRadius: 10, padding: 8, border: "1px solid rgba(59,130,246,0.25)" }}>
+              <div style={{ fontSize: 9, color: "#64748B", marginBottom: 4 }}>Hex</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--accent-blue)", lineHeight: 1.2, fontFamily: "monospace", paddingTop: 4 }}>{nvmSaveCycleHex}</div>
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: "#64748B" }}>Last read: <span style={{ color: "var(--text-primary)", fontFamily: "monospace" }}>{nvmLastRead}</span></div>
+         </div>
+        </window.Card>
+
+        <window.Card>
+         <window.SectionLabel style={{ marginBottom: 8 }}>Every NVM save counter</window.SectionLabel>
+         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#64748B' }}>
+            <input type='checkbox' checked={nvmAutoRead} onChange={e => setNvmAutoRead(e.target.checked)} disabled={nvmReading || nvmWriting} />
+            Auto-read after each flash
+          </label>
+          <window.Btn onClick={() => setNvmCounterLog([])} disabled={nvmReading || nvmWriting} color='#E2E8F0' style={{ padding: '4px 8px', fontSize: 10 }}>Clear</window.Btn>
+         </div>
+         <div style={{ background: '#F8FAFC', borderRadius: 10, border: '1px solid #E2E8F0', maxHeight: 160, overflowY: 'auto' }}>
+          {nvmCounterLog.length === 0 ? (
+            <div style={{ padding: 12, fontSize: 11, color: '#64748B' }}>No counter reads yet.</div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+              <thead style={{ position: "sticky", top: 0, background: "#F8FAFC", zIndex: 1 }}>
+                <tr style={{ color: '#64748B', borderBottom: '1px solid #E2E8F0' }}>
+                  {['#','Time','Reason','Dec','Hex'].map(h => (
+                    <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 500, fontSize: 10 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {nvmCounterLog.map((e, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #E2E8F0', color: 'var(--text-primary)' }}>
+                    <td style={{ padding: '7px 10px', color: '#64748B' }}>{nvmCounterLog.length - i}</td>
+                    <td style={{ padding: '7px 10px', color: '#64748B', whiteSpace: 'nowrap' }}>{e.ts}</td>
+                    <td style={{ padding: '7px 10px', color: '#64748B' }}>{e.reason}</td>
+                    <td style={{ padding: '7px 10px', fontFamily: 'monospace', color: '#a78bfa' }}>{e.dec}</td>
+                    <td style={{ padding: '7px 10px', fontFamily: 'monospace', color: 'var(--accent-blue)' }}>{e.hex}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+         </div>
         </window.Card>
       </div>
     </div>

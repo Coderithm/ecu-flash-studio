@@ -42,23 +42,22 @@ function App() {
   }, []);
 
   const pages = {
-    dashboard: <window.Dashboard flashOp={flashOp} flashCount={flashCount} ecuConfig={ecuConfig} />,
+    dashboard: <window.Dashboard flashOp={flashOp} flashCount={flashCount} ecuConfig={ecuConfig} sessionLog={sessionLog} />,
     multiflash: <window.MultiFlash flashOp={flashOp} sessionLog={sessionLog} />,
     interruptions: <window.InterruptionTests flashOp={flashOp} sessionLog={sessionLog} />,
     nvm: <window.NvmData />,
     flashlog: <window.FlashLog sessionLog={sessionLog} />,
-    cantrace: <window.CanTrace />
+    cantrace: <window.CanTrace flashOp={flashOp} />
   };
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh" }}>
+    <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
       <window.Sidebar active={active} setActive={setActive} />
-      <main style={{ flex: 1, padding: 32, overflowY: "auto", position: "relative" }}>
+      <main style={{ flex: 1, padding: 32, overflowY: "auto", position: "relative", height: "100%" }}>
         
         {/* Persistent Branding */}
-        <div style={{ position: "absolute", top: 32, right: 32, display: "flex", alignItems: "center", gap: 10, background: "#FFFFFF", padding: "8px 16px", borderRadius: 8, border: "1px solid #E2E8F0", boxShadow: "0 1px 2px rgba(0,0,0,0.05)", zIndex: 50 }}>
-          <span style={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.1em" }}>Powered by</span>
-          <span style={{ fontSize: 22, fontWeight: 900, color: "var(--accent-primary)", letterSpacing: "0.05em" }}>MAHLE</span>
+        <div style={{ position: "absolute", top: 16, right: 32, display: "flex", alignItems: "center", gap: 10, background: "#FFFFFF", padding: "8px 16px", borderRadius: 8, border: "1px solid #E2E8F0", boxShadow: "0 1px 2px rgba(0,0,0,0.05)", zIndex: 50 }}>
+          <img src="/static/image.png" alt="Branding Logo" style={{ height: 32, objectFit: "contain", mixBlendMode: "multiply" }} />
         </div>
 
         <div key={active} className="animate-fade-in-up" style={{ marginTop: 10 }}>
