@@ -234,7 +234,8 @@
     "boot_flag_delay_ms": 0,
     "checksum_delay_ms": 100,
     "history_zone_delay_ms": 0,
-    "clear_dtc_delay_ms": 0
+    "clear_dtc_delay_ms": 0,
+    "security_key_delay_ms": 50
   },
   "live": {
     "external_request_ids": [

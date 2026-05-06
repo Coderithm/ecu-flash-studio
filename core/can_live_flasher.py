@@ -887,6 +887,11 @@ def process_live_flash(profile_path: str):
                         sf_byte = int(profile['security']['send_key']['subfunction'], 16)
                         send_key_payload = bytes([0x27, sf_byte]) + real_key
                         real_send_key_frames = isotp_encode(send_key_payload, ctx.pad_byte)
+                        # Delay before sending key — ECU needs time to process seed internally
+                        security_key_delay = int(profile.get("timing", {}).get("security_key_delay_ms", 50)) / 1000.0
+                        if security_key_delay > 0:
+                            log(f"  Waiting {security_key_delay*1000:.0f}ms before sending key...")
+                            time.sleep(security_key_delay)
                     elif payload and len(payload) >= 2 and payload[0] == 0x51:
                         if runtime.post_reset_cleanup_delay > 0:
                             log(
