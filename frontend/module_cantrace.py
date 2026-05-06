@@ -8,21 +8,25 @@ window.CanTrace = function({ flashOp }) {
   const [showEVT, setShowEVT] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
   const [traceMeta, setTraceMeta] = useState({ total: 0, returned: 0, truncated: false, limit: 1500 });
+  const [busMeta, setBusMeta] = useState({ bits_per_second: 0, frames_per_second: 0, window_ms: 1000 });
   const wrapRef = useRef(null);
 
   const opRunning = !!flashOp?.running;
   const [chartData, setChartData] = useState(Array(40).fill(0));
   const [displayLoad, setDisplayLoad] = useState(0);
   const canLoadRef = useRef(0);
+  const displayLoadRef = useRef(0);
   const prevTraceLen = useRef(0);
 
   useEffect(() => {
     const iv = setInterval(() => {
-      let v = canLoadRef.current;
-      if (v > 0) v = Math.max(0, Math.min(100, v + (Math.random() * 4 - 2)));
-      setDisplayLoad(v);
-      setChartData(prev => [...prev.slice(1), v]);
-    }, 100);
+      const target = Math.max(0, Math.min(100, canLoadRef.current));
+      const prev = displayLoadRef.current;
+      const next = Math.abs(target - prev) < 0.05 ? target : prev + ((target - prev) * 0.35);
+      displayLoadRef.current = next;
+      setDisplayLoad(next);
+      setChartData(history => [...history.slice(1), next]);
+    }, 200);
     return () => clearInterval(iv);
   }, []);
 
@@ -53,13 +57,21 @@ window.CanTrace = function({ flashOp }) {
           truncated: !!st.truncated,
           limit: Number(st.limit ?? 1500)
         });
+        const busLoad = st.bus_load || {};
+        setBusMeta({
+          bits_per_second: Number(busLoad.bits_per_second ?? 0),
+          frames_per_second: Number(busLoad.frames_per_second ?? 0),
+          window_ms: Number(busLoad.window_ms ?? 1000)
+        });
         
         const totalFrames = Number(st.total ?? newTrace.length);
         const dFrames = Math.max(0, totalFrames - prevTraceLen.current);
         prevTraceLen.current = totalFrames;
-        
-        canLoadRef.current = Math.min(100, dFrames / 20); // roughly max 2000 frames/500ms at 500kbps
-        if (!opRunning && dFrames === 0) canLoadRef.current = 0;
+
+        const backendPercent = Number(busLoad.percent);
+        const fallbackPercent = Math.min(100, dFrames * 0.08);
+        canLoadRef.current = Number.isFinite(backendPercent) ? backendPercent : fallbackPercent;
+        if (!opRunning && dFrames === 0 && canLoadRef.current < 0.1) canLoadRef.current = 0;
       } catch(e) { }
     }
     pollTrace();
@@ -87,7 +99,12 @@ window.CanTrace = function({ flashOp }) {
     await fetch('/api/can_trace_clear', { method: 'POST' });
     setCanTrace([]);
     setTraceMeta({ total: 0, returned: 0, truncated: false, limit: 1500 });
+    setBusMeta({ bits_per_second: 0, frames_per_second: 0, window_ms: 1000 });
     prevTraceLen.current = 0;
+    canLoadRef.current = 0;
+    displayLoadRef.current = 0;
+    setDisplayLoad(0);
+    setChartData(Array(40).fill(0));
   }
 
   async function exportLog() {
@@ -164,6 +181,7 @@ window.CanTrace = function({ flashOp }) {
               }} />
             </div>
             <div style={{ fontSize: 11, fontWeight: 800, color: "#0ea5e9", fontFamily: "monospace" }}>{displayLoad.toFixed(1)}%</div>
+            <div style={{ fontSize: 9, color: "#64748B", fontFamily: "monospace", textAlign: "center", lineHeight: 1.2 }}>{busMeta.frames_per_second.toFixed(0)} fps</div>
           </div>
         </div>
       </window.Card>

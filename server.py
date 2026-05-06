@@ -8,6 +8,7 @@ import socket
 import json
 import time
 import urllib.parse
+import os
 
 from core.api_routes import get_flash_status, start_multiflash, stop_multiflash, read_nvm, write_nvm, get_nvm_map, update_nvm_map, export_trc_for_file, get_can_trace
 from frontend.html_core import HTML_WRAPPER
@@ -122,12 +123,12 @@ class PurePythonRouter(http.server.SimpleHTTPRequestHandler):
             files = payload.get('files', [])
             times = payload.get('times', 1)
             
-            start_multiflash(files, times)
+            started = start_multiflash(files, times)
                 
-            self.send_response(200)
+            self.send_response(200 if started else 409)
             self.send_header("Content-type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "started"}).encode("utf-8"))
+            self.wfile.write(json.dumps({"status": "started" if started else "busy_or_empty", "started": started}).encode("utf-8"))
             return
         elif parsed.path == '/api/stop_multiflash':
             res = stop_multiflash()
@@ -195,14 +196,33 @@ def get_free_port():
     s.close()
     return port
 
+class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
 if __name__ == "__main__":
+    def _log_unhandled_exception(exctype, value, tb):
+        import traceback
+        with open("server_startup_error.log", "a", encoding="utf-8") as fh:
+            traceback.print_exception(exctype, value, tb, file=fh)
+        sys.__excepthook__(exctype, value, tb)
+
+    sys.excepthook = _log_unhandled_exception
+
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser", action="store_true", help="Force open in browser instead of native window")
+    parser.add_argument("--no-open", action="store_true", help="Run the HTTP server without opening a window or browser")
+    parser.add_argument("--port", type=int, default=None, help="Port to bind. Defaults to a free random port")
     args = parser.parse_args()
 
-    port = get_free_port()
-    httpd = socketserver.TCPServer(("", port), PurePythonRouter)
+    port = args.port or get_free_port()
+    httpd = ThreadingTCPServer(("", port), PurePythonRouter)
     
     print(f"[*] Starting Pure-Python Engine on port {port}...")
     server_thread = threading.Thread(target=httpd.serve_forever)
@@ -211,7 +231,7 @@ if __name__ == "__main__":
     
     url = f"http://localhost:{port}"
 
-    use_webview = not args.browser
+    use_webview = not args.browser and not args.no_open
     if use_webview:
         try:
             import webview
@@ -237,8 +257,11 @@ if __name__ == "__main__":
         httpd.server_close()
         sys.exit(0)
     else:
-        print(f"[*] Opening browser to {url}")
-        webbrowser.open(url)
+        if not args.no_open:
+            print(f"[*] Opening browser to {url}")
+            webbrowser.open(url)
+        else:
+            print(f"[*] Serving UI at {url}")
         print("[*] Press Ctrl+C to stop.")
         try:
             while True:

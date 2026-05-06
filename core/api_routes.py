@@ -3,6 +3,7 @@ import threading
 import time
 import base64
 import random
+from collections import deque
 
 flash_session = {
     "running": False,
@@ -30,17 +31,123 @@ last_interruption_result = None
 can_trace_log = []
 TRACE_LOG_MAX = 50000
 TRACE_API_DEFAULT_LIMIT = 1500
+CAN_BITRATE_BPS = 500000
+BUS_LOAD_WINDOW_SECONDS = 1.0
 _trace_lock = threading.RLock()
+_bus_load_samples = deque()
 
 # Per-file traces: keyed by log entry id -> list of trace frames
 flash_traces = {}
 _current_file_trace = []
 _current_file_trace_id = None
 
+def _trace_data_len(data):
+    count = 0
+    for part in str(data or "").split():
+        try:
+            value = int(part, 16)
+        except ValueError:
+            continue
+        if 0 <= value <= 0xFF:
+            count += 1
+    return min(count, 8)
+
+def _is_extended_can_id(can_id):
+    try:
+        return int(str(can_id).replace("0x", "").replace("0X", ""), 16) > 0x7FF
+    except ValueError:
+        return False
+
+def _estimate_classic_can_bits(can_id, data):
+    dlc = _trace_data_len(data)
+    base_bits = 75 if _is_extended_can_id(can_id) else 55
+    # Include a conservative stuffing/inter-frame margin so the load is useful
+    # for live monitoring without needing a full CAN controller bit counter.
+    return int((base_bits + (dlc * 8)) * 1.2)
+
+def _prune_bus_load_samples(now):
+    cutoff = now - BUS_LOAD_WINDOW_SECONDS
+    while _bus_load_samples and _bus_load_samples[0][0] < cutoff:
+        _bus_load_samples.popleft()
+
+def _current_bus_load_locked(now=None):
+    now = time.time() if now is None else now
+    _prune_bus_load_samples(now)
+    bits = sum(sample_bits for _, sample_bits in _bus_load_samples)
+    frames = len(_bus_load_samples)
+    percent = (bits / (CAN_BITRATE_BPS * BUS_LOAD_WINDOW_SECONDS)) * 100.0
+    return {
+        "percent": round(max(0.0, min(100.0, percent)), 2),
+        "bits_per_second": int(bits / BUS_LOAD_WINDOW_SECONDS),
+        "frames_per_second": round(frames / BUS_LOAD_WINDOW_SECONDS, 1),
+        "window_ms": int(BUS_LOAD_WINDOW_SECONDS * 1000),
+        "bitrate": CAN_BITRATE_BPS,
+    }
+
+def reset_flash_session(total_ops=0, clear_log=True, clear_trace_log=True):
+    global _current_file_trace_id
+    flash_count = flash_session.get("flashCount", 0)
+    flash_session.update({
+        "running": True,
+        "current_op": 0,
+        "total_ops": max(0, int(total_ops or 0)),
+        "progress": 0.0,
+        "elapsedMs": 0,
+        "total_progress": 0.0,
+        "eta_seconds": -1,
+        "flashCount": flash_count,
+        "swFile": "\u2014",
+        "master_start": time.time(),
+        "force_stop": False,
+    })
+    if clear_log:
+        flash_session["sessionLog"] = []
+    with _trace_lock:
+        _current_file_trace.clear()
+        _current_file_trace_id = None
+        flash_traces.clear()
+        _bus_load_samples.clear()
+        if clear_trace_log:
+            can_trace_log.clear()
+
+def finish_flash_session(completed=True):
+    total_ops = max(1, int(flash_session.get("total_ops") or 1))
+    current_op = max(0, int(flash_session.get("current_op") or 0))
+    if completed:
+        flash_session["progress"] = 100.0
+        flash_session["total_progress"] = 100.0
+        flash_session["eta_seconds"] = 0
+    else:
+        flash_session["total_progress"] = min(100.0, (current_op / total_ops) * 100.0)
+        flash_session["eta_seconds"] = 0
+    flash_session["running"] = False
+
+def start_file_trace():
+    global _current_file_trace_id
+    with _trace_lock:
+        _current_file_trace.clear()
+        _current_file_trace_id = True
+
+def finish_file_trace(log_id):
+    global _current_file_trace_id
+    with _trace_lock:
+        entries = list(_current_file_trace)
+        if entries:
+            flash_traces[log_id] = entries
+        _current_file_trace.clear()
+        _current_file_trace_id = None
+    return bool(entries)
+
+def abort_file_trace():
+    global _current_file_trace_id
+    with _trace_lock:
+        _current_file_trace_id = None
+
 def push_trace(dir, canId, data, note=""):
+    now = time.time()
     entry = {
-        "id": time.time(),
-        "ts": time.strftime("%H:%M:%S.") + f"{int((time.time() % 1) * 1000):03d}",
+        "id": now,
+        "ts": time.strftime("%H:%M:%S.", time.localtime(now)) + f"{int((now % 1) * 1000):03d}",
         "dir": dir,
         "canId": canId,
         "data": data,
@@ -50,6 +157,9 @@ def push_trace(dir, canId, data, note=""):
         can_trace_log.append(entry)
         if len(can_trace_log) > TRACE_LOG_MAX:
             del can_trace_log[:len(can_trace_log) - TRACE_LOG_MAX]
+        if str(dir).upper() in {"TX", "RX"}:
+            _bus_load_samples.append((now, _estimate_classic_can_bits(canId, data)))
+            _prune_bus_load_samples(now)
         # Also append to per-file trace if capture is active
         if _current_file_trace_id is not None:
             _current_file_trace.append(entry)
@@ -57,6 +167,7 @@ def push_trace(dir, canId, data, note=""):
 def clear_trace():
     with _trace_lock:
         can_trace_log.clear()
+        _bus_load_samples.clear()
 
 def get_can_trace(limit=TRACE_API_DEFAULT_LIMIT):
     try:
@@ -71,6 +182,7 @@ def get_can_trace(limit=TRACE_API_DEFAULT_LIMIT):
     with _trace_lock:
         total = len(can_trace_log)
         trace = list(can_trace_log[-limit:])
+        bus_load = _current_bus_load_locked()
 
     return {
         "trace": trace,
@@ -78,6 +190,7 @@ def get_can_trace(limit=TRACE_API_DEFAULT_LIMIT):
         "returned": len(trace),
         "truncated": total > len(trace),
         "limit": limit,
+        "bus_load": bus_load,
     }
 
 nvm_memory = {
@@ -96,16 +209,9 @@ NVM_DATA_MAP = [
 ]
 
 def simulate_flash_sequence(files_data, times):
-    global flash_session, _current_file_trace_id
-    flash_session['running'] = True
-    flash_session['sessionLog'] = []
-    flash_session['current_op'] = 0
-    flash_session['total_progress'] = 0.0
-    flash_session['eta_seconds'] = -1
-    flash_session['master_start'] = time.time()
-    
+    global flash_session
     total_files = len(files_data) * times
-    flash_session['total_ops'] = total_files
+    reset_flash_session(total_files)
     
     # Try to import the real trace builder
     trace_builder = None
@@ -131,13 +237,12 @@ def simulate_flash_sequence(files_data, times):
             if flash_session.get('force_stop'): break
             fname = file_obj['name']
             
-            flash_session['current_op'] += 1
+            flash_session['current_op'] = (t * len(files_data)) + idx + 1
             flash_session['swFile'] = fname
             flash_session['progress'] = 0.0
             
             # Start per-file trace capture
-            _current_file_trace.clear()
-            _current_file_trace_id = True
+            start_file_trace()
             
             op_start = int(time.time() * 1000)
             global_completed = (t * len(files_data)) + idx
@@ -225,14 +330,9 @@ def simulate_flash_sequence(files_data, times):
             flash_session['sessionLog'].insert(0, log_entry)
             
             # Save per-file trace snapshot
-            with _trace_lock:
-                flash_traces[log_id] = list(_current_file_trace)
-                _current_file_trace.clear()
-                _current_file_trace_id = None
+            log_entry["has_trace"] = finish_file_trace(log_id)
 
-    flash_session['total_progress'] = 100.0
-    flash_session['eta_seconds'] = 0
-    flash_session['running'] = False
+    finish_flash_session(completed=not flash_session.get('force_stop'))
     print("\n[BACKEND] Multi-flash sequence complete!")
 
 def get_flash_status():
@@ -249,35 +349,59 @@ def _run_flash_engine(files, times):
         # Try physical PCAN flash
         success = flasher.process_live_flash(flasher.DEFAULT_PROFILE, files, times)
         if not success:
-            # Check if live flasher partially ran (some flashes already completed)
-            if flash_session.get('current_op', 0) > 0 and len(flash_session.get('sessionLog', [])) > 0:
+            # If any operation had started, never hide a hardware failure behind simulation.
+            if flash_session.get('current_op', 0) > 0:
                 # Live flasher failed mid-sequence — do NOT restart as simulation
                 # Mark session as stopped with a failure entry
                 print(f"[BACKEND] Live flasher failed after {len(flash_session['sessionLog'])} flash(es). NOT falling back to simulation.")
                 push_trace("EVT", "\u2014", "\u2014", "PCAN hardware error — flashing stopped. Remaining flashes aborted.")
+                elapsed_ms = int(flash_session.get('elapsedMs') or 0)
+                log_id = int(time.time() * 1000)
                 log_entry = {
-                    "id": int(time.time() * 1000),
+                    "id": log_id,
                     "swFile": flash_session.get('swFile', '\u2014'),
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "duration": "0.0s",
-                    "duration_ms": 0,
+                    "duration": f"{elapsed_ms // 1000}.{(elapsed_ms % 1000)//100}s",
+                    "duration_ms": elapsed_ms,
                     "status": "failed",
-                    "has_trace": False
+                    "has_trace": finish_file_trace(log_id)
                 }
                 flash_session['sessionLog'].insert(0, log_entry)
-                flash_session['total_progress'] = 100.0
-                flash_session['eta_seconds'] = 0
-                flash_session['running'] = False
+                finish_flash_session(completed=False)
             else:
                 # Live flasher failed before any flashes started (e.g. PCAN init failed)
                 # Safe to fall back to full simulation
                 print(f"[BACKEND] Live flasher failed at init, falling back to simulation.")
                 simulate_flash_sequence(files, times)
     except (ImportError, SystemExit, Exception) as e:
-        print(f"[BACKEND] Live flasher unavailable ({e}), falling back to simulation.")
-        simulate_flash_sequence(files, times)
+        if flash_session.get('current_op', 0) > 0:
+            print(f"[BACKEND] Live flasher failed after starting hardware flash ({e}). NOT falling back to simulation.")
+            push_trace("EVT", "\u2014", "\u2014", f"PCAN hardware error: {e}. Remaining flashes aborted.")
+            elapsed_ms = int(flash_session.get('elapsedMs') or 0)
+            log_id = int(time.time() * 1000)
+            log_entry = {
+                "id": log_id,
+                "swFile": flash_session.get('swFile', '\u2014'),
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "duration": f"{elapsed_ms // 1000}.{(elapsed_ms % 1000)//100}s",
+                "duration_ms": elapsed_ms,
+                "status": "failed",
+                "has_trace": finish_file_trace(log_id)
+            }
+            flash_session['sessionLog'].insert(0, log_entry)
+            finish_flash_session(completed=False)
+        else:
+            print(f"[BACKEND] Live flasher unavailable ({e}), falling back to simulation.")
+            simulate_flash_sequence(files, times)
 
 def start_multiflash(files, times):
+    try:
+        times = int(times)
+    except (TypeError, ValueError):
+        times = 1
+    times = max(1, min(times, 100000))
+    files = [f for f in files if f.get('name')]
+
     if not flash_session['running'] and len(files) > 0:
         # Save uploaded base64 files to FIRMWARE_DIR so live flasher can find them
         try:
@@ -285,7 +409,8 @@ def start_multiflash(files, times):
             from core.hex_parsing import FIRMWARE_DIR
             os.makedirs(FIRMWARE_DIR, exist_ok=True)
             for f in files:
-                name = f.get('name')
+                name = os.path.basename(f.get('name') or '')
+                f['name'] = name
                 data_b64 = f.get('data_b64')
                 if name and data_b64:
                     filepath = os.path.join(FIRMWARE_DIR, name)
@@ -293,9 +418,9 @@ def start_multiflash(files, times):
                         out_file.write(base64.b64decode(data_b64))
         except Exception as e:
             print(f"[BACKEND] Error saving uploaded files: {e}")
+            return False
 
-        flash_session['running'] = True
-        flash_session['force_stop'] = False
+        reset_flash_session(len(files) * times)
         t = threading.Thread(target=_run_flash_engine, args=(files, times))
         t.daemon = True
         t.start()

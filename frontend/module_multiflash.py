@@ -12,6 +12,7 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
   ));
   
   const [times, setTimes] = useState(1);
+  const [starting, setStarting] = useState(false);
   const running = flashOp?.running || false;
   const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
 
@@ -50,20 +51,34 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
 
   async function startFlashing() {
     const ops = buildOps(); if (ops.length === 0) return;
-    const filePromises = ops.map(r => new Promise((resolve) => {
+    setStarting(true);
+    try {
+    const filePromises = ops.map(r => new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = (e) => resolve({ name: r.fileName, data_b64: e.target.result.split(',')[1] || "" });
+      reader.onerror = () => reject(new Error(`Unable to read ${r.fileName}`));
       reader.readAsDataURL(r.fileObj);
     }));
     const filesData = await Promise.all(filePromises);
-    fetch('/api/start_multiflash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: filesData, times: times }) });
+    const res = await fetch('/api/start_multiflash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: filesData, times: times }) });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.started === false) {
+      const msg = running ? "Flash engine is already running." : "Unable to start flashing. Check selected files.";
+      if (window.showToast) window.showToast(msg, "error"); else alert(msg);
+    }
+    } catch (e) {
+      const msg = e?.message || "Unable to read selected files.";
+      if (window.showToast) window.showToast(msg, "error"); else alert(msg);
+    } finally {
+      setStarting(false);
+    }
   }
 
   async function stopFlashing() {
     await fetch('/api/stop_multiflash', { method: 'POST' });
   }
 
-  const opsCount = buildOps().length; const canStart = !running && opsCount > 0;
+  const opsCount = buildOps().length; const canStart = !running && !starting && opsCount > 0;
   const successCount = sessionLog.filter(e => e.status === "success").length;
   const failCount = sessionLog.filter(e => e.status === "failed").length;
 
@@ -233,7 +248,7 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
                           })}
                         </select>
                       </td>
-                      <td style={{ padding: 4 }}><input type="file" accept=".hex,.bin" disabled={running} onChange={e => handleFileChange(i, e)} className="text-[10px] text-slate-300 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-[10px] file:font-semibold file:bg-blue-500/20 file:text-blue-400 hover:file:bg-blue-500/30 transition shadow-none cursor-pointer outline-none w-full" /></td>
+                      <td style={{ padding: 4 }}><input type="file" accept=".hex" disabled={running || starting} onChange={e => handleFileChange(i, e)} className="text-[10px] text-slate-300 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-[10px] file:font-semibold file:bg-blue-500/20 file:text-blue-400 hover:file:bg-blue-500/30 transition shadow-none cursor-pointer outline-none w-full" /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -251,7 +266,7 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <window.Btn onClick={startFlashing} disabled={!canStart} className="py-1 text-[12px]" style={{ flex: 1 }}>
-                {running ? `Execution in Progress (${flashOp?.cycle || 0}/${flashOp?.total || 0})...` : "\u25b6 Begin Hardware Flashing"}
+                {starting ? "Preparing files..." : (running ? `Execution in Progress (${flashOp?.cycle || 0}/${flashOp?.total || 0})...` : "\u25b6 Begin Hardware Flashing")}
               </window.Btn>
               {running && (
                 <window.Btn onClick={stopFlashing} className="py-1 text-[12px]" style={{ background: "#0ea5e9" }}>
