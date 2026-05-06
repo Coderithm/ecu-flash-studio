@@ -9,7 +9,7 @@ import json
 import time
 import urllib.parse
 
-from core.api_routes import get_flash_status, start_multiflash, stop_multiflash, read_nvm, write_nvm, get_nvm_map, update_nvm_map, export_trc_for_file
+from core.api_routes import get_flash_status, start_multiflash, stop_multiflash, read_nvm, write_nvm, get_nvm_map, update_nvm_map, export_trc_for_file, get_can_trace
 from frontend.html_core import HTML_WRAPPER
 from frontend.module_utils import UTILS_JSX
 from frontend.module_sidebar import SIDEBAR_JSX
@@ -49,11 +49,12 @@ class PurePythonRouter(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"data": get_nvm_map()}).encode("utf-8"))
             return
         elif parsed.path == '/api/can_trace':
-            import core.api_routes
+            qs = urllib.parse.parse_qs(parsed.query)
+            limit = qs.get('limit', [None])[0]
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"trace": core.api_routes.can_trace_log}).encode("utf-8"))
+            self.wfile.write(json.dumps(get_can_trace(limit)).encode("utf-8"))
             return
         elif parsed.path == '/api/ecu_config':
             from core.api_routes import get_ecu_config

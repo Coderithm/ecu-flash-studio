@@ -7,6 +7,7 @@ window.CanTrace = function({ flashOp }) {
   const [showRX, setShowRX] = useState(true);
   const [showEVT, setShowEVT] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [traceMeta, setTraceMeta] = useState({ total: 0, returned: 0, truncated: false, limit: 1500 });
   const wrapRef = useRef(null);
 
   const opRunning = !!flashOp?.running;
@@ -25,29 +26,52 @@ window.CanTrace = function({ flashOp }) {
     return () => clearInterval(iv);
   }, []);
 
-  // Poll for traces separately
+  function normalizeFrame(f) {
+    return {
+      id: f?.id || `${f?.ts || ""}-${f?.dir || ""}-${Math.random()}`,
+      ts: String(f?.ts ?? ""),
+      dir: String(f?.dir ?? "EVT").toUpperCase(),
+      canId: String(f?.canId ?? ""),
+      data: String(f?.data ?? ""),
+      note: String(f?.note ?? "")
+    };
+  }
+
+  // Poll for a bounded trace snapshot so the table stays responsive during flashing.
   useEffect(() => {
-    const iv = setInterval(async () => {
+    let alive = true;
+    async function pollTrace() {
       try {
-        const res = await fetch('/api/can_trace');
+        const res = await fetch('/api/can_trace?limit=1500');
         const st = await res.json();
-        const newTrace = st.trace || [];
+        if (!alive) return;
+        const newTrace = Array.isArray(st.trace) ? st.trace.map(normalizeFrame) : [];
         setCanTrace(newTrace);
+        setTraceMeta({
+          total: Number(st.total ?? newTrace.length),
+          returned: Number(st.returned ?? newTrace.length),
+          truncated: !!st.truncated,
+          limit: Number(st.limit ?? 1500)
+        });
         
-        const dFrames = Math.max(0, newTrace.length - prevTraceLen.current);
-        prevTraceLen.current = newTrace.length;
+        const totalFrames = Number(st.total ?? newTrace.length);
+        const dFrames = Math.max(0, totalFrames - prevTraceLen.current);
+        prevTraceLen.current = totalFrames;
         
         canLoadRef.current = Math.min(100, dFrames / 20); // roughly max 2000 frames/500ms at 500kbps
         if (!opRunning && dFrames === 0) canLoadRef.current = 0;
       } catch(e) { }
-    }, 500);
-    return () => clearInterval(iv);
+    }
+    pollTrace();
+    const iv = setInterval(pollTrace, 500);
+    return () => { alive = false; clearInterval(iv); };
   }, [opRunning]);
 
   const filtered = canTrace.filter(f => {
-    if (!showTX && f.dir === "TX") return false;
-    if (!showRX && f.dir === "RX") return false;
-    if (!showEVT && f.dir === "EVT") return false;
+    const dir = f.dir || "EVT";
+    if (!showTX && dir === "TX") return false;
+    if (!showRX && dir === "RX") return false;
+    if (!showEVT && dir === "EVT") return false;
     if (!q) return true;
     const hay = `${f.ts} ${f.dir} ${f.canId} ${f.data} ${f.note}`.toLowerCase();
     return hay.includes(q.toLowerCase());
@@ -62,19 +86,35 @@ window.CanTrace = function({ flashOp }) {
   async function clearAll() {
     await fetch('/api/can_trace_clear', { method: 'POST' });
     setCanTrace([]);
+    setTraceMeta({ total: 0, returned: 0, truncated: false, limit: 1500 });
+    prevTraceLen.current = 0;
   }
 
-  function exportLog() {
-    const lines = canTrace.map(f => `${f.ts}\t${f.dir}\t${f.canId}\t${f.data}\t${f.note || ""}`);
-    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `can_trace_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.log`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+  async function exportLog() {
+    try {
+      const res = await fetch('/api/export_trc');
+      if (res.status === 204) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `can_trace_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.trc`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch(e) {
+      const lines = canTrace.map(f => `${f.ts}\t${f.dir}\t${f.canId}\t${f.data}\t${f.note || ""}`);
+      const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `can_trace_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.log`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
   }
 
   async function copyLog() {
@@ -83,7 +123,7 @@ window.CanTrace = function({ flashOp }) {
   }
 
   const getRowStyle = (f) => {
-    const data = (f.data || "").toUpperCase();
+    const data = String(f?.data || "").toUpperCase();
     if (data.startsWith("7F")) return { background: "rgba(14, 165, 233, 0.08)", borderLeft: "4px solid #0ea5e9" }; // Sky Blue for NRCs
     if (data.startsWith("27")) return { background: "rgba(251, 191, 36, 0.08)", borderLeft: "4px solid #fbbf24" };
     if (data.startsWith("36") || data.startsWith("34")) return { background: "rgba(59, 130, 246, 0.08)", borderLeft: "4px solid var(--accent-primary)" };
@@ -155,7 +195,9 @@ window.CanTrace = function({ flashOp }) {
       <window.Card style={{ padding: 0 }}>
         <div style={{ padding: "12px 20px", borderBottom: "1px solid #E2E8F0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.15em", color: "#64748B", textTransform: "uppercase" }}>Diagnostic Trace Stream</div>
-          <div style={{ fontSize: 11, color: "#64748B", fontWeight: 700 }}>{filtered.length} frames</div>
+          <div style={{ fontSize: 11, color: "#64748B", fontWeight: 700 }}>
+            {filtered.length} shown{traceMeta.truncated ? ` / ${traceMeta.total} total` : ""}
+          </div>
         </div>
 
         <div ref={wrapRef} style={{ maxHeight: 520, overflowY: "auto", overflowX: "hidden" }}>
@@ -174,10 +216,10 @@ window.CanTrace = function({ flashOp }) {
                   <tr key={f.id || i} style={{ ...getRowStyle(f), borderBottom: "1px solid #E2E8F0", transition: "all 0.2s" }} className="group">
                     <td style={{ padding: "10px 14px", fontSize: 11, color: "#64748B", fontFamily: "monospace" }}>{f.ts}</td>
                     <td style={{ padding: "10px 14px" }}>
-                      <span style={{ padding: "2px 6px", borderRadius: 4, background: f.dir === "TX" ? "rgba(253, 230, 138, 0.1)" : "rgba(110, 231, 183, 0.1)", color: window.dirColor(f.dir), fontWeight: 800, fontSize: 10 }}>{f.dir}</span>
+                      <span style={{ padding: "2px 6px", borderRadius: 4, background: String(f.dir || "EVT") === "TX" ? "rgba(253, 230, 138, 0.1)" : "rgba(110, 231, 183, 0.1)", color: window.dirColor(String(f.dir || "EVT")), fontWeight: 800, fontSize: 10 }}>{String(f.dir || "EVT")}</span>
                     </td>
                     <td style={{ padding: "10px 14px", fontFamily: "monospace", color: "var(--accent-primary)", fontWeight: 700 }}>{f.canId}</td>
-                    <td style={{ padding: "10px 14px", fontFamily: "monospace", color: f.data.startsWith("7F") ? "#0ea5e9" : "var(--text-primary)", letterSpacing: "0.05em" }}>{f.data}</td>
+                    <td style={{ padding: "10px 14px", fontFamily: "monospace", color: String(f.data || "").startsWith("7F") ? "#0ea5e9" : "var(--text-primary)", letterSpacing: "0.05em" }}>{String(f.data || "")}</td>
                     <td style={{ padding: "10px 14px", fontSize: 11, color: "#64748B", fontStyle: f.note ? "normal" : "italic" }}>{f.note || "—"}</td>
                   </tr>
                 ))

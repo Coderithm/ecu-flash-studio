@@ -308,9 +308,10 @@ def process_live_flash(profile_path: str, files_data, times):
             api.flash_session['sessionLog'].insert(0, log_entry)
 
             # Save per-file trace snapshot
-            api.flash_traces[log_id] = list(api._current_file_trace)
-            api._current_file_trace.clear()
-            api._current_file_trace_id = None
+            with api._trace_lock:
+                api.flash_traces[log_id] = list(api._current_file_trace)
+                api._current_file_trace.clear()
+                api._current_file_trace_id = None
 
     api.flash_session['total_progress'] = 100.0
     api.flash_session['eta_seconds'] = 0

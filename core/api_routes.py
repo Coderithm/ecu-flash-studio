@@ -28,6 +28,9 @@ interruption_tests = [
 last_interruption_result = None
 
 can_trace_log = []
+TRACE_LOG_MAX = 50000
+TRACE_API_DEFAULT_LIMIT = 1500
+_trace_lock = threading.RLock()
 
 # Per-file traces: keyed by log entry id -> list of trace frames
 flash_traces = {}
@@ -43,14 +46,39 @@ def push_trace(dir, canId, data, note=""):
         "data": data,
         "note": note
     }
-    can_trace_log.append(entry)
-    # Also append to per-file trace if capture is active
-    if _current_file_trace_id is not None:
-        _current_file_trace.append(entry)
+    with _trace_lock:
+        can_trace_log.append(entry)
+        if len(can_trace_log) > TRACE_LOG_MAX:
+            del can_trace_log[:len(can_trace_log) - TRACE_LOG_MAX]
+        # Also append to per-file trace if capture is active
+        if _current_file_trace_id is not None:
+            _current_file_trace.append(entry)
 
 def clear_trace():
-    global can_trace_log
-    can_trace_log = []
+    with _trace_lock:
+        can_trace_log.clear()
+
+def get_can_trace(limit=TRACE_API_DEFAULT_LIMIT):
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = TRACE_API_DEFAULT_LIMIT
+
+    if limit <= 0:
+        limit = TRACE_API_DEFAULT_LIMIT
+    limit = min(limit, TRACE_LOG_MAX)
+
+    with _trace_lock:
+        total = len(can_trace_log)
+        trace = list(can_trace_log[-limit:])
+
+    return {
+        "trace": trace,
+        "total": total,
+        "returned": len(trace),
+        "truncated": total > len(trace),
+        "limit": limit,
+    }
 
 nvm_memory = {
     "F190": [0x00, 0x00]
@@ -197,9 +225,10 @@ def simulate_flash_sequence(files_data, times):
             flash_session['sessionLog'].insert(0, log_entry)
             
             # Save per-file trace snapshot
-            flash_traces[log_id] = list(_current_file_trace)
-            _current_file_trace.clear()
-            _current_file_trace_id = None
+            with _trace_lock:
+                flash_traces[log_id] = list(_current_file_trace)
+                _current_file_trace.clear()
+                _current_file_trace_id = None
 
     flash_session['total_progress'] = 100.0
     flash_session['eta_seconds'] = 0
@@ -506,11 +535,14 @@ def _build_trc_from_entries(entries):
 
 def export_trc():
     """Export the full CAN trace log as PEAK .trc format."""
-    return _build_trc_from_entries(can_trace_log)
+    with _trace_lock:
+        entries = list(can_trace_log)
+    return _build_trc_from_entries(entries)
 
 def export_trc_for_file(log_id):
     """Export the CAN trace for a specific flash operation by its log ID."""
-    entries = flash_traces.get(log_id)
+    with _trace_lock:
+        entries = list(flash_traces.get(log_id) or [])
     if not entries:
         return None
     return _build_trc_from_entries(entries)
