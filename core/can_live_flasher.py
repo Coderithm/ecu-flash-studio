@@ -184,6 +184,8 @@ def response_timeout_for(frame) -> float:
     expected_payload = decode_single_frame_payload(frame.data)
     if expected_payload and expected_payload[0] == 0x54:
         return 10.0
+    if expected_payload and expected_payload[0] == 0x51:
+        return 10.0
     if "set boot flag" in comment or "clear boot flag" in comment:
         return 5.0
     if "update" in comment and "history" in comment:
@@ -207,6 +209,12 @@ def should_retry_response(frame) -> bool:
         or "clear all dtcs" in comment
         or bool(expected_payload and expected_payload[0] == 0x54)
     )
+
+
+def is_ecu_reset_response(frame) -> bool:
+    """Return True if this frame expects an ECUReset positive response (0x51)."""
+    expected_payload = decode_single_frame_payload(frame.data)
+    return bool(expected_payload and expected_payload[0] == 0x51)
 
 
 def is_clear_dtc_request(msg) -> bool:
@@ -832,7 +840,17 @@ def process_live_flash(profile_path: str):
                         tx_can_id=tx_can_id_int,
                     )
                     if not rx_msg:
-                        if should_retry_response(frame) and last_tx_msg is not None:
+                        if is_ecu_reset_response(frame):
+                            # ECUReset timeout is expected — the ECU reboots before responding
+                            log("  WARN: No ECUReset response (ECU is rebooting — this is normal).")
+                            if runtime.post_reset_cleanup_delay > 0:
+                                log(
+                                    f"  Waiting {runtime.post_reset_cleanup_delay:.1f}s "
+                                    "for ECU to finish rebooting..."
+                                )
+                                time.sleep(runtime.post_reset_cleanup_delay)
+                            continue
+                        elif should_retry_response(frame) and last_tx_msg is not None:
                             for attempt in range(1, runtime.clear_dtc_retries + 1):
                                 log(
                                     "  WARN: No response; "

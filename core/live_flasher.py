@@ -43,6 +43,7 @@ from core.can_live_flasher import (
     is_critical_request,
     is_clear_dtc_request,
     is_control_dtc_setting_enable_request,
+    is_ecu_reset_response,
     is_response_pending_frame,
     response_timeout_for,
     should_retry_response,
@@ -237,7 +238,15 @@ def process_live_flash(profile_path: str, files_data, times):
                         )
 
                         if not rx_msg:
-                            if should_retry_response(frame) and last_tx_msg is not None:
+                            if is_ecu_reset_response(frame):
+                                # ECUReset timeout is expected — the ECU reboots before responding
+                                api.push_trace("EVT", "—", "—", "No ECUReset response (ECU is rebooting — this is normal)")
+                                if runtime.post_reset_cleanup_delay > 0:
+                                    api.push_trace("EVT", "—", "—",
+                                        f"Waiting {runtime.post_reset_cleanup_delay:.1f}s for ECU to finish rebooting...")
+                                    time.sleep(runtime.post_reset_cleanup_delay)
+                                continue
+                            elif should_retry_response(frame) and last_tx_msg is not None:
                                 for attempt in range(1, runtime.clear_dtc_retries + 1):
                                     api.push_trace("EVT", "—", "—",
                                         f"No response; retrying ({attempt}/{runtime.clear_dtc_retries})...")
