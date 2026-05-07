@@ -112,11 +112,12 @@ def process_live_flash(profile_path: str, files_data, times):
         for idx, name in enumerate(hex_files):
             if api.flash_session.get('force_stop'): break
             global_completed = (t * len(hex_files)) + idx
+            seq_number = global_completed + 1
             if global_completed > 0 and inter_file_delay > 0:
-                api.push_trace("EVT", "â€”", "â€”", f"Waiting {inter_file_delay:.1f}s for ECU to settle before next file...")
+                api.push_trace("EVT", "\u2014", "\u2014", f"Waiting {inter_file_delay:.1f}s for ECU to settle before next file...")
                 time.sleep(inter_file_delay)
 
-            api.flash_session['current_op'] = global_completed + 1
+            api.flash_session['current_op'] = seq_number
             api.flash_session['swFile'] = name
             api.flash_session['progress'] = 0.0
             api.flash_session['elapsedMs'] = 0
@@ -125,46 +126,47 @@ def process_live_flash(profile_path: str, files_data, times):
             # Start per-file trace capture
             api.start_file_trace()
 
-            hex_path = os.path.join(FIRMWARE_DIR, name)
-            if not os.path.exists(hex_path):
-                api.push_trace("EVT", "—", "—", f"File not found: {hex_path}")
-                api.abort_file_trace()
-                return False
+            # --- Per-flash try/except: skip on failure, continue to next ---
+            flash_failed = False
+            flash_fail_reason = ""
+            try:
+                hex_path = os.path.join(FIRMWARE_DIR, name)
+                if not os.path.exists(hex_path):
+                    raise FileNotFoundError(f"File not found: {hex_path}")
 
-            parsed_segments = parse_intel_hex_segments(hex_path)
-            selected_segments = select_flash_segments(parsed_segments, ctx)
-            trace = build_flash_sequence(selected_segments, ctx)
-            total_frames = len(trace)
+                parsed_segments = parse_intel_hex_segments(hex_path)
+                selected_segments = select_flash_segments(parsed_segments, ctx)
+                trace = build_flash_sequence(selected_segments, ctx)
+                total_frames = len(trace)
 
-            api.push_trace("EVT", "—", "—", f"Executing {total_frames} frames for {name}")
+                api.push_trace("EVT", "\u2014", "\u2014", f"Executing {total_frames} frames for {name}")
 
-            # Dynamic seed-key: stores real ISO-TP frames for send_key
-            real_send_key_frames = []
-            last_tx_msg = None
+                # Dynamic seed-key: stores real ISO-TP frames for send_key
+                real_send_key_frames = []
+                last_tx_msg = None
 
-            for i, frame in enumerate(trace):
-                if api.flash_session.get('force_stop'):
-                    api.push_trace("EVT", "—", "—", "Force stop requested. Flash sequence aborted by operator.")
-                    api.abort_file_trace()
-                    api.finish_flash_session(completed=False)
-                    bus.shutdown()
-                    return True
+                for i, frame in enumerate(trace):
+                    if api.flash_session.get('force_stop'):
+                        api.push_trace("EVT", "\u2014", "\u2014", "Force stop requested. Flash sequence aborted by operator.")
+                        api.abort_file_trace()
+                        api.finish_flash_session(completed=False)
+                        bus.shutdown()
+                        return True
 
-                # Update Progress
-                p = (i / total_frames) * 100.0
-                api.flash_session['progress'] = p
-                api.flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
-                current_fraction = (global_completed + (i / total_frames)) / total_files
-                api.flash_session['total_progress'] = current_fraction * 100.0
-                elapsed_total = time.time() - api.flash_session['master_start']
-                if current_fraction > 0:
-                    api.flash_session['eta_seconds'] = int((elapsed_total / current_fraction) - elapsed_total)
+                    # Update Progress
+                    p = (i / total_frames) * 100.0
+                    api.flash_session['progress'] = p
+                    api.flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
+                    current_fraction = (global_completed + (i / total_frames)) / total_files
+                    api.flash_session['total_progress'] = current_fraction * 100.0
+                    elapsed_total = time.time() - api.flash_session['master_start']
+                    if current_fraction > 0:
+                        api.flash_session['eta_seconds'] = int((elapsed_total / current_fraction) - elapsed_total)
 
-                try:
-                    # ── TRANSMIT ──
+                    # \u2500\u2500 TRANSMIT \u2500\u2500
                     if frame.direction == 'Tx':
                         if frame.comment:
-                            api.push_trace("EVT", "—", "—", f"Step {i+1}/{total_frames}: {frame.comment}")
+                            api.push_trace("EVT", "\u2014", "\u2014", f"Step {i+1}/{total_frames}: {frame.comment}")
 
                         # Replace send_key frames with real computed key
                         send_data = list(frame.data)
@@ -175,10 +177,7 @@ def process_live_flash(profile_path: str, files_data, times):
 
                         if runtime.drain_before_critical and is_critical_request(send_data):
                             if not drain_bus(bus, runtime, f"before {frame.comment or 'request'}"):
-                                api.push_trace("EVT", "—", "—", "FAIL: External tester traffic detected.")
-                                api.abort_file_trace()
-                                bus.shutdown()
-                                return False
+                                raise RuntimeError("External tester traffic detected")
 
                         msg = can.Message(
                             arbitration_id=int(frame.can_id, 16),
@@ -188,10 +187,7 @@ def process_live_flash(profile_path: str, files_data, times):
 
                         if is_clear_dtc_request(msg):
                             if not wait_for_bus_idle(bus, runtime, "ClearDTC"):
-                                api.push_trace("EVT", "—", "—", "FAIL: Bus not idle before ClearDTC.")
-                                api.abort_file_trace()
-                                bus.shutdown()
-                                return False
+                                raise RuntimeError("Bus not idle before ClearDTC")
 
                         send_live(bus, msg, runtime)
                         last_tx_msg = msg
@@ -211,14 +207,11 @@ def process_live_flash(profile_path: str, files_data, times):
                         if pci_nibble == 0x1:
                             fc_msg = wait_for_flow_control(bus, expected_rx_id, runtime, timeout=1.0)
                             if not fc_msg:
-                                api.push_trace("EVT", "—", "—", "FAIL: Timeout waiting for FlowControl from ECU.")
-                                api.abort_file_trace()
-                                bus.shutdown()
-                                return False
+                                raise RuntimeError("Timeout waiting for FlowControl from ECU")
                             fc_data_hex = ' '.join(f'{b:02X}' for b in fc_msg.data)
                             api.push_trace("RX", hex(fc_msg.arbitration_id)[2:].upper(), fc_data_hex, "FlowControl")
 
-                    # ── RECEIVE ──
+                    # \u2500\u2500 RECEIVE \u2500\u2500
                     elif frame.direction == 'Rx':
                         # Skip Consecutive Frames and Flow Control frames - already handled
                         pci = frame.data[0] >> 4
@@ -239,23 +232,20 @@ def process_live_flash(profile_path: str, files_data, times):
 
                         if not rx_msg:
                             if is_ecu_reset_response(frame):
-                                # ECUReset timeout is expected — the ECU reboots before responding
-                                api.push_trace("EVT", "—", "—", "No ECUReset response (ECU is rebooting — this is normal)")
+                                api.push_trace("EVT", "\u2014", "\u2014", "No ECUReset response (ECU is rebooting \u2014 this is normal)")
                                 if runtime.post_reset_cleanup_delay > 0:
-                                    api.push_trace("EVT", "—", "—",
+                                    api.push_trace("EVT", "\u2014", "\u2014",
                                         f"Waiting {runtime.post_reset_cleanup_delay:.1f}s for ECU to finish rebooting...")
                                     time.sleep(runtime.post_reset_cleanup_delay)
                                 continue
                             elif should_retry_response(frame) and last_tx_msg is not None:
                                 for attempt in range(1, runtime.clear_dtc_retries + 1):
-                                    api.push_trace("EVT", "—", "—",
+                                    api.push_trace("EVT", "\u2014", "\u2014",
                                         f"No response; retrying ({attempt}/{runtime.clear_dtc_retries})...")
                                     time.sleep(runtime.clear_dtc_retry_delay)
                                     if is_clear_dtc_request(last_tx_msg):
                                         if not wait_for_bus_idle(bus, runtime, "ClearDTC retry"):
-                                            api.abort_file_trace()
-                                            bus.shutdown()
-                                            return False
+                                            raise RuntimeError("Bus not idle before ClearDTC retry")
                                     send_live(bus, last_tx_msg, runtime)
                                     retry_hex = ' '.join(f'{b:02X}' for b in last_tx_msg.data)
                                     api.push_trace("TX", hex(last_tx_msg.arbitration_id)[2:].upper(), retry_hex, "Retry")
@@ -267,76 +257,89 @@ def process_live_flash(profile_path: str, files_data, times):
                                         break
                                 if not rx_msg:
                                     expected_hex = ' '.join(f'{b:02X}' for b in frame.data)
-                                    api.push_trace("EVT", "—", "—", f"FAIL: Timeout after retry. Expected: {expected_hex}")
-                                    api.abort_file_trace()
-                                    bus.shutdown()
-                                    return False
+                                    raise RuntimeError(f"Timeout after retry. Expected: {expected_hex}")
                             else:
                                 expected_hex = ' '.join(f'{b:02X}' for b in frame.data)
-                                api.push_trace("EVT", "—", "—", f"FAIL: Timeout waiting for ECU response: {expected_hex}")
-                                api.abort_file_trace()
-                                bus.shutdown()
-                                return False
+                                raise RuntimeError(f"Timeout waiting for ECU response: {expected_hex}")
 
                         rx_data_hex = ' '.join(f'{b:02X}' for b in rx_msg.msg.data)
                         api.push_trace("RX", hex(rx_msg.msg.arbitration_id)[2:].upper(), rx_data_hex, frame.comment)
 
                         negative_response = describe_negative_response(rx_msg.payload)
                         if negative_response:
-                            api.push_trace("EVT", "—", "—", f"FAIL: ECU negative response: {negative_response}")
-                            api.abort_file_trace()
-                            bus.shutdown()
-                            return False
+                            raise RuntimeError(f"ECU negative response: {negative_response}")
 
                         # --- Detect SecurityAccess seed response and compute real key ---
                         payload = rx_msg.payload
                         if payload and len(payload) >= 3 and payload[0] == 0x67:
                             seed = payload[2:]
                             seed_hex = ' '.join(f'{b:02X}' for b in seed)
-                            api.push_trace("EVT", "—", "—", f"REAL SEED: {seed_hex}")
+                            api.push_trace("EVT", "\u2014", "\u2014", f"REAL SEED: {seed_hex}")
                             real_key = build_security_key(ctx, seed)
                             key_hex = ' '.join(f'{b:02X}' for b in real_key)
-                            api.push_trace("EVT", "—", "—", f"COMPUTED KEY: {key_hex}")
+                            api.push_trace("EVT", "\u2014", "\u2014", f"COMPUTED KEY: {key_hex}")
                             sf_byte = int(profile['security']['send_key']['subfunction'], 16)
                             send_key_payload = bytes([0x27, sf_byte]) + real_key
                             real_send_key_frames = isotp_encode(send_key_payload, ctx.pad_byte)
-                            # Delay before sending key — ECU needs time to process seed internally
                             security_key_delay = int(profile.get("timing", {}).get("security_key_delay_ms", 50)) / 1000.0
                             if security_key_delay > 0:
-                                api.push_trace("EVT", "—", "—", f"Waiting {security_key_delay*1000:.0f}ms before sending key...")
+                                api.push_trace("EVT", "\u2014", "\u2014", f"Waiting {security_key_delay*1000:.0f}ms before sending key...")
                                 time.sleep(security_key_delay)
                         elif payload and len(payload) >= 2 and payload[0] == 0x51:
                             if runtime.post_reset_cleanup_delay > 0:
-                                api.push_trace("EVT", "—", "—",
+                                api.push_trace("EVT", "\u2014", "\u2014",
                                     f"ECU reset acknowledged; waiting {runtime.post_reset_cleanup_delay:.1f}s")
                                 time.sleep(runtime.post_reset_cleanup_delay)
 
-                except Exception as e:
-                    api.push_trace("EVT", "—", "—", f"EXECUTION ERROR at frame {i}: {e}")
-                    api.abort_file_trace()
-                    bus.shutdown()
-                    return False
+            except Exception as flash_err:
+                flash_failed = True
+                flash_fail_reason = str(flash_err)
+                api.push_trace("EVT", "\u2014", "\u2014", f"Flash #{seq_number} ({name}) FAILED: {flash_err}")
+                print(f"[BACKEND] Flash #{seq_number} ({name}) FAILED: {flash_err}")
 
-            api.flash_session['progress'] = 100.0
-            api.flash_session['flashCount'] += 1
-            fc = api.flash_session['flashCount']
-            api.nvm_memory["F190"] = [(fc >> 8) & 0xFF, fc & 0xFF]
-
-            log_id = int(time.time() * 1000)
+            # --- Record result ---
+            api.flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
             elapsed_ms = api.flash_session['elapsedMs']
-            log_entry = {
-                "id": log_id,
-                "swFile": name,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "duration": f"{elapsed_ms // 1000}.{(elapsed_ms % 1000)//100}s",
-                "duration_ms": elapsed_ms,
-                "status": "success",
-                "has_trace": True
-            }
-            api.flash_session['sessionLog'].insert(0, log_entry)
+            log_id = int(time.time() * 1000)
 
-            # Save per-file trace snapshot
-            log_entry["has_trace"] = api.finish_file_trace(log_id)
+            if flash_failed:
+                log_entry = {
+                    "id": log_id,
+                    "swFile": name,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "duration": f"{elapsed_ms // 1000}.{(elapsed_ms % 1000)//100}s",
+                    "duration_ms": elapsed_ms,
+                    "status": "failed",
+                    "seq": seq_number,
+                    "has_trace": api.finish_file_trace(log_id)
+                }
+                api.flash_session['sessionLog'].insert(0, log_entry)
+                api.flash_session['failedFlashes'].append({
+                    "seq": seq_number,
+                    "file": name,
+                    "error": flash_fail_reason,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                })
+                # Continue to next flash instead of aborting
+                continue
+            else:
+                api.flash_session['progress'] = 100.0
+                api.flash_session['flashCount'] += 1
+                fc = api.flash_session['flashCount']
+                api.nvm_memory["F190"] = [(fc >> 8) & 0xFF, fc & 0xFF]
+
+                log_entry = {
+                    "id": log_id,
+                    "swFile": name,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "duration": f"{elapsed_ms // 1000}.{(elapsed_ms % 1000)//100}s",
+                    "duration_ms": elapsed_ms,
+                    "status": "success",
+                    "seq": seq_number,
+                    "has_trace": True
+                }
+                api.flash_session['sessionLog'].insert(0, log_entry)
+                log_entry["has_trace"] = api.finish_file_trace(log_id)
 
     api.finish_flash_session(completed=not api.flash_session.get('force_stop'))
     bus.shutdown()

@@ -17,7 +17,8 @@ flash_session = {
     "sessionLog": [],
     "swFile": "\u2014",
     "master_start": 0,
-    "force_stop": False
+    "force_stop": False,
+    "failedFlashes": []
 }
 
 interruption_tests = [
@@ -99,6 +100,7 @@ def reset_flash_session(total_ops=0, clear_log=True, clear_trace_log=True):
         "swFile": "\u2014",
         "master_start": time.time(),
         "force_stop": False,
+        "failedFlashes": [],
     })
     if clear_log:
         flash_session["sessionLog"] = []
@@ -236,8 +238,9 @@ def simulate_flash_sequence(files_data, times):
         for idx, file_obj in enumerate(files_data):
             if flash_session.get('force_stop'): break
             fname = file_obj['name']
+            seq_number = (t * len(files_data)) + idx + 1
             
-            flash_session['current_op'] = (t * len(files_data)) + idx + 1
+            flash_session['current_op'] = seq_number
             flash_session['swFile'] = fname
             flash_session['progress'] = 0.0
             
@@ -247,90 +250,111 @@ def simulate_flash_sequence(files_data, times):
             op_start = int(time.time() * 1000)
             global_completed = (t * len(files_data)) + idx
             
-            # Try to build real trace from hex file
-            trace_frames = None
-            if trace_builder:
-                try:
-                    import os
-                    hex_path = os.path.join(FIRMWARE_DIR, fname)
-                    if os.path.exists(hex_path):
-                        segments = parse_intel_hex_segments(hex_path)
-                        selected = select_flash_segments(segments, ctx)
-                        trace_frames = build_flash_sequence(selected, ctx)
-                        print(f"[BACKEND] Built real trace for {fname}: {len(trace_frames)} frames")
-                except Exception as e:
-                    print(f"[BACKEND] Trace build failed for {fname}: {e}")
-                    trace_frames = None
-            
-            if trace_frames:
-                # Replay REAL trace frames
-                total_steps = len(trace_frames)
-                push_trace("EVT", "—", "—", f"Replaying {total_steps} frames from {fname}")
+            try:
+                # Try to build real trace from hex file
+                trace_frames = None
+                if trace_builder:
+                    try:
+                        import os
+                        hex_path = os.path.join(FIRMWARE_DIR, fname)
+                        if os.path.exists(hex_path):
+                            segments = parse_intel_hex_segments(hex_path)
+                            selected = select_flash_segments(segments, ctx)
+                            trace_frames = build_flash_sequence(selected, ctx)
+                            print(f"[BACKEND] Built real trace for {fname}: {len(trace_frames)} frames")
+                    except Exception as e:
+                        print(f"[BACKEND] Trace build failed for {fname}: {e}")
+                        trace_frames = None
                 
-                for step, frame in enumerate(trace_frames):
-                    # Pace the simulation (fast but visible)
-                    if step % 50 == 0:
-                        time.sleep(0.01)
+                if trace_frames:
+                    total_steps = len(trace_frames)
+                    push_trace("EVT", "\u2014", "\u2014", f"Replaying {total_steps} frames from {fname}")
                     
-                    dir_label = "TX" if frame.direction == "Tx" else "RX"
-                    data_hex = ' '.join(f'{b:02X}' for b in frame.data)
-                    push_trace(dir_label, frame.can_id.upper(), data_hex, frame.comment)
-                    
-                    # Update progress
-                    p = (step / total_steps) * 100.0
-                    flash_session['progress'] = p
-                    flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
-                    
-                    current_fraction = (global_completed + (step / total_steps)) / total_files
-                    flash_session['total_progress'] = current_fraction * 100.0
-                    
-                    elapsed_total = time.time() - flash_session['master_start']
-                    if current_fraction > 0:
-                        total_expected = elapsed_total / current_fraction
-                        flash_session['eta_seconds'] = int(total_expected - elapsed_total)
-            else:
-                # Fallback: basic 20-step simulation
-                steps = 20
-                push_trace("EVT", "—", "—", f"Basic simulation for {fname} (hex file not in firmware/)")
-                for step in range(steps):
-                    time.sleep(0.12)
-                    bsc = ((step + 1) % 256)
-                    push_trace("TX", "740", f"36 {bsc:02X} AA BB CC DD EE FF", f"TransferData (0x36) - Block {step+1}")
-                    if step % 2 == 0:
-                         push_trace("RX", "748", f"02 76 {bsc:02X} 00 00 00 00 00", "TransferData positive response (0x76)")
-                    
-                    p = (step / steps) * 100.0
-                    flash_session['progress'] = p
-                    flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
-                    current_fraction = (global_completed + (step / steps)) / total_files
-                    flash_session['total_progress'] = current_fraction * 100.0
-                    elapsed_total = time.time() - flash_session['master_start']
-                    if current_fraction > 0:
-                        total_expected = elapsed_total / current_fraction
-                        flash_session['eta_seconds'] = int(total_expected - elapsed_total)
-            
-            flash_session['progress'] = 100.0
-            flash_session['flashCount'] += 1
-            
-            # Sync to mock NVM F190
-            fc = flash_session['flashCount']
-            nvm_memory["F190"] = [(fc >> 8) & 0xFF, fc & 0xFF]
-            
-            log_id = int(time.time() * 1000)
-            elapsed_ms = flash_session['elapsedMs']
-            log_entry = {
-                "id": log_id,
-                "swFile": fname,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "duration": f"{elapsed_ms // 1000}.{(elapsed_ms % 1000)//100}s",
-                "duration_ms": elapsed_ms,
-                "status": "success",
-                "has_trace": True
-            }
-            flash_session['sessionLog'].insert(0, log_entry)
-            
-            # Save per-file trace snapshot
-            log_entry["has_trace"] = finish_file_trace(log_id)
+                    for step, frame in enumerate(trace_frames):
+                        if step % 50 == 0:
+                            time.sleep(0.01)
+                        
+                        dir_label = "TX" if frame.direction == "Tx" else "RX"
+                        data_hex = ' '.join(f'{b:02X}' for b in frame.data)
+                        push_trace(dir_label, frame.can_id.upper(), data_hex, frame.comment)
+                        
+                        p = (step / total_steps) * 100.0
+                        flash_session['progress'] = p
+                        flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
+                        
+                        current_fraction = (global_completed + (step / total_steps)) / total_files
+                        flash_session['total_progress'] = current_fraction * 100.0
+                        
+                        elapsed_total = time.time() - flash_session['master_start']
+                        if current_fraction > 0:
+                            total_expected = elapsed_total / current_fraction
+                            flash_session['eta_seconds'] = int(total_expected - elapsed_total)
+                else:
+                    steps = 20
+                    push_trace("EVT", "\u2014", "\u2014", f"Basic simulation for {fname} (hex file not in firmware/)")
+                    for step in range(steps):
+                        time.sleep(0.12)
+                        bsc = ((step + 1) % 256)
+                        push_trace("TX", "740", f"36 {bsc:02X} AA BB CC DD EE FF", f"TransferData (0x36) - Block {step+1}")
+                        if step % 2 == 0:
+                             push_trace("RX", "748", f"02 76 {bsc:02X} 00 00 00 00 00", "TransferData positive response (0x76)")
+                        
+                        p = (step / steps) * 100.0
+                        flash_session['progress'] = p
+                        flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
+                        current_fraction = (global_completed + (step / steps)) / total_files
+                        flash_session['total_progress'] = current_fraction * 100.0
+                        elapsed_total = time.time() - flash_session['master_start']
+                        if current_fraction > 0:
+                            total_expected = elapsed_total / current_fraction
+                            flash_session['eta_seconds'] = int(total_expected - elapsed_total)
+                
+                flash_session['progress'] = 100.0
+                flash_session['flashCount'] += 1
+                
+                fc = flash_session['flashCount']
+                nvm_memory["F190"] = [(fc >> 8) & 0xFF, fc & 0xFF]
+                
+                log_id = int(time.time() * 1000)
+                elapsed_ms = flash_session['elapsedMs']
+                log_entry = {
+                    "id": log_id,
+                    "swFile": fname,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "duration": f"{elapsed_ms // 1000}.{(elapsed_ms % 1000)//100}s",
+                    "duration_ms": elapsed_ms,
+                    "status": "success",
+                    "seq": seq_number,
+                    "has_trace": True
+                }
+                flash_session['sessionLog'].insert(0, log_entry)
+                log_entry["has_trace"] = finish_file_trace(log_id)
+
+            except Exception as flash_err:
+                # Flash failed \u2014 record and continue to next flash
+                print(f"[BACKEND] Flash #{seq_number} ({fname}) FAILED: {flash_err}")
+                push_trace("EVT", "\u2014", "\u2014", f"Flash #{seq_number} ({fname}) FAILED: {flash_err}")
+                
+                elapsed_ms = int(time.time() * 1000) - op_start
+                log_id = int(time.time() * 1000)
+                log_entry = {
+                    "id": log_id,
+                    "swFile": fname,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "duration": f"{elapsed_ms // 1000}.{(elapsed_ms % 1000)//100}s",
+                    "duration_ms": elapsed_ms,
+                    "status": "failed",
+                    "seq": seq_number,
+                    "has_trace": finish_file_trace(log_id)
+                }
+                flash_session['sessionLog'].insert(0, log_entry)
+                flash_session['failedFlashes'].append({
+                    "seq": seq_number,
+                    "file": fname,
+                    "error": str(flash_err),
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                })
+                continue
 
     finish_flash_session(completed=not flash_session.get('force_stop'))
     print("\n[BACKEND] Multi-flash sequence complete!")
@@ -339,6 +363,7 @@ def get_flash_status():
     st = dict(flash_session)
     st["cycle"] = st.get("current_op", 0)
     st["total"] = st.get("total_ops", 0)
+    st["failedFlashes"] = list(flash_session.get("failedFlashes", []))
     st["interruption_tests"] = interruption_tests
     st["last_interruption_result"] = last_interruption_result
     return st

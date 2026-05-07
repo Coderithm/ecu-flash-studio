@@ -13,6 +13,7 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
   
   const [times, setTimes] = useState(1);
   const [starting, setStarting] = useState(false);
+  const [failedDropOpen, setFailedDropOpen] = useState(false);
   const running = flashOp?.running || false;
   const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
 
@@ -81,6 +82,7 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
   const opsCount = buildOps().length; const canStart = !running && !starting && opsCount > 0;
   const successCount = sessionLog.filter(e => e.status === "success").length;
   const failCount = sessionLog.filter(e => e.status === "failed").length;
+  const failedFlashes = flashOp?.failedFlashes || [];
 
   const opRunning = !!flashOp?.running;
   
@@ -302,7 +304,29 @@ window.MultiFlash = function({ flashOp, sessionLog }) {
             
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, paddingTop: 10, borderTop: "1px solid #E2E8F0" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#059669" }}>Successful: {successCount}</div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#ef4444" }}>Failed: {failCount}</div>
+              <div style={{ position: "relative" }}>
+                <button onClick={() => setFailedDropOpen(p => !p)} style={{ fontSize: 11, fontWeight: 700, color: "#ef4444", background: failedFlashes.length > 0 ? "rgba(239,68,68,0.08)" : "transparent", border: failedFlashes.length > 0 ? "1px solid rgba(239,68,68,0.25)" : "1px solid transparent", borderRadius: 6, padding: "2px 10px", cursor: failedFlashes.length > 0 ? "pointer" : "default", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 4 }}>
+                  Failed: {failCount} {failedFlashes.length > 0 && <span style={{ fontSize: 9, opacity: 0.7 }}>{failedDropOpen ? "\u25b2" : "\u25bc"}</span>}
+                </button>
+                {failedDropOpen && failedFlashes.length > 0 && (
+                  <div style={{ position: "absolute", bottom: "100%", right: 0, marginBottom: 6, background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.12)", zIndex: 100, minWidth: 280, maxHeight: 200, overflowY: "auto", padding: 0 }}>
+                    <div style={{ padding: "10px 14px", borderBottom: "1px solid #E2E8F0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#1E293B" }}>Failed Flash Sequences</span>
+                      <span style={{ fontSize: 10, color: "#ef4444", fontWeight: 600, background: "rgba(239,68,68,0.1)", borderRadius: 9999, padding: "1px 8px" }}>{failedFlashes.length}</span>
+                    </div>
+                    {failedFlashes.map((f, i) => (
+                      <div key={i} style={{ padding: "8px 14px", borderBottom: "1px solid #F1F5F9", display: "flex", gap: 10, alignItems: "flex-start", fontSize: 11 }}>
+                        <span style={{ fontWeight: 800, color: "#ef4444", fontFamily: "monospace", minWidth: 30 }}>#{f.seq}</span>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontFamily: "monospace", color: "#0284c7", fontWeight: 600 }}>{f.file}</div>
+                          <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>{f.error || "Unknown error"}</div>
+                          <div style={{ fontSize: 9, color: "#CBD5E1", marginTop: 1 }}>{f.timestamp}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </window.Card>
 
