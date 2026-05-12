@@ -64,7 +64,7 @@ LEVEL3_MASKS = [
         "C0F27F62", "F8B8684D", "56659339", "F9A8DB20",
         "EF32F810", "FF02C6CA", "5526D521", "A71CFE65",
         "CDB66BD3", "D3C8D704", "18ABCAA3", "2516E0BC",
-        "B7DFDB23", "F71ECCD4", "D3418485", "34868ECF",
+        "B7DFDB23", "F71ECCD4", "D34184B5", "34868ECF",
         "EDDEC9AC", "D2B1A352", "573A37EB", "3079BBBA",
         "A3CD3103", "7C1052A1", "5673B92E", "DF70399E",
         "E189392E", "744FFEED", "4954AF94", "A39C7FE3",
@@ -156,32 +156,67 @@ def _level1_compute(seed: bytes) -> bytes:
     if seed == b"\x00\x00\x00\x00":
         return b"\x00\x00\x00\x00"
 
-    # Level 1 specifies byte 0 as the least-significant byte.
+    # Level 1: byte layout is little-endian (byte[0]=LSB, byte[3]=MSB).
+    # C: seedMaskIndex = seed & 0x0F            → bits 0-3   → byte[0] lower nibble
+    # C: rotateCount   = (xored & 0xF0000) >> 16 → bits 16-19 → byte[2] lower nibble
+    # C: direction     = xored & 0x80000000       → bit 31     → byte[3] bit 7
     mask = LEVEL1_MASKS[seed[0] & 0x0F]
     xored = _xor(seed, mask)
-    rotate_count = xored[1] & 0x0F
+    rotate_count = xored[2] & 0x0F
     rotate_right = (xored[3] & 0x80) != 0
+    if rotate_count == 0:
+        return bytes(xored)
     return _rotate(xored, rotate_count, rotate_right)
 
 
 def _split_level3_seed(seed: bytes) -> tuple[bytes, bytes]:
+    """Faithful port of the C seedSeparateLeftRight function.
+
+    Uses a 2-pass algorithm:
+      Pass 1 — assign bytes to L or R based on largestByte bits, respecting
+               the 4-slot capacity of each side.
+      Pass 2 — any unprocessed bytes fill whichever side is short.
+    """
     largest = max(seed)
-    seed_l = bytearray()
-    seed_r = bytearray()
+    # seed_modified is the 8-byte seed in big-endian order (same as C's seedModified)
+    seed_modified = list(seed)
+    seed_modified_lr = [0] * 8
+    cnt_l = 0
+    cnt_r = 0
+    processed = 0  # bitmask tracking which byte indices have been assigned
 
-    for index, value in enumerate(seed):
-        if len(seed_l) == 4:
-            seed_r.append(value)
-        elif len(seed_r) == 4:
-            seed_l.append(value)
-        elif (largest >> index) & 0x01:
-            seed_l.append(value)
+    # --- Pass 1: assign by largestByte bits ---
+    for bit in range(8):
+        bit_val = largest & (1 << bit)
+        if bit_val != 0 and cnt_l < 4:
+            seed_modified_lr[cnt_l] = seed_modified[bit]
+            processed |= (1 << bit)
+            cnt_l += 1
+        elif bit_val == 0 and cnt_r < 4:
+            seed_modified_lr[4 + cnt_r] = seed_modified[bit]
+            processed |= (1 << bit)
+            cnt_r += 1
+        # else: byte is unprocessed, handled in pass 2
+
+    # --- Pass 2: fill whichever side is short with remaining bytes ---
+    if cnt_r != cnt_l:
+        if cnt_r < cnt_l:
+            for bit in range(8):
+                if (processed & (1 << bit)) == 0:
+                    seed_modified_lr[4 + cnt_r] = seed_modified[bit]
+                    processed |= (1 << bit)
+                    cnt_r += 1
         else:
-            seed_r.append(value)
+            for bit in range(8):
+                if (processed & (1 << bit)) == 0:
+                    seed_modified_lr[cnt_l] = seed_modified[bit]
+                    processed |= (1 << bit)
+                    cnt_l += 1
 
-    if len(seed_l) != 4 or len(seed_r) != 4:
-        raise ValueError("Level 3 seed split did not produce two 4-byte seeds")
-    return bytes(seed_l), bytes(seed_r)
+    # Reconstruct seedL and seedR as big-endian 4-byte values
+    seed_l = bytes(seed_modified_lr[0:4])
+    seed_r = bytes(seed_modified_lr[4:8])
+    return seed_l, seed_r
 
 
 def _level3_compute(seed: bytes) -> bytes:
