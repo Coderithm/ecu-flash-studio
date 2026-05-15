@@ -144,6 +144,20 @@ class PurePythonRouter(http.server.SimpleHTTPRequestHandler):
             
             did = payload.get('did', '')
             data = payload.get('data', [])
+        elif parsed.path == '/api/stop_multiflash':
+            res = stop_multiflash()
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode('utf-8'))
+            return
+        elif parsed.path == '/api/nvm_write':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            payload = json.loads(post_data.decode('utf-8'))
+            
+            did = payload.get('did', '')
+            data = payload.get('data', [])
             
             self.send_response(200)
             self.send_header("Content-type", "application/json")
@@ -169,8 +183,9 @@ class PurePythonRouter(http.server.SimpleHTTPRequestHandler):
             payload = json.loads(post_data.decode('utf-8'))
             
             test_id = payload.get('test_id')
+            file_obj = payload.get('file')
             from core.api_routes import start_interruption_test
-            started = start_interruption_test(test_id)
+            started = start_interruption_test(test_id, file_obj)
             
             self.send_response(200)
             self.send_header("Content-type", "application/json")
