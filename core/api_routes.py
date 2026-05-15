@@ -22,10 +22,7 @@ flash_session = {
 }
 
 interruption_tests = [
-    { "id": 1, "name": "Erase Phase Interruption", "status": "idle" },
-    { "id": 2, "name": "CAN bus disconnect during 0x31 RoutineControl", "status": "idle" },
-    { "id": 3, "name": "Voltage drop < 9V during 0x34 RequestDownload", "status": "idle" },
-    { "id": 4, "name": "Security Access 0x27 Seed/Key timeout", "status": "idle" }
+    { "id": 1, "name": "Erase Phase Interruption", "status": "idle" }
 ]
 last_interruption_result = None
 
@@ -508,128 +505,29 @@ def update_nvm_map(addr, val):
             break
     return {"status": "success"}
 
-def simulate_erase_interruption(test_id, file_obj=None):
-    global flash_session, last_interruption_result
-    
-    test_obj = next((t for t in interruption_tests if t["id"] == test_id), None)
-    if not test_obj:
-        return
-        
-    test_name = test_obj["name"]
-    test_obj["status"] = "running"
-    
-    fname = f"{test_name} (Interruption)"
-    if file_obj and file_obj.get("name"):
-        fname = file_obj["name"]
-        data_b64 = file_obj.get("data_b64")
-        if data_b64:
-            try:
-                import os
-                import base64
-                from core.hex_parsing import FIRMWARE_DIR
-                os.makedirs(FIRMWARE_DIR, exist_ok=True)
-                filepath = os.path.join(FIRMWARE_DIR, fname)
-                with open(filepath, "wb") as out_file:
-                    out_file.write(base64.b64decode(data_b64))
-            except Exception as e:
-                print(f"[BACKEND] Error saving interruption file: {e}")
-    
-    flash_session['running'] = True
-    flash_session['current_op'] = 1
-    flash_session['total_ops'] = 1
-    flash_session['progress'] = 0.0
-    flash_session['total_progress'] = 0.0
-    flash_session['swFile'] = fname
-    flash_session['master_start'] = time.time()
-    
-    op_start = int(time.time() * 1000)
-    
-    # 1. Read Initial SW Version
-    push_trace("EVT", "—", "—", "Reading initial SW Version...")
-    push_trace("TX", "740", "03 22 F1 80 00 00 00 00", "ReadDataByIdentifier (0x22) - SW Version")
-    time.sleep(0.1)
-    push_trace("RX", "748", "07 62 F1 80 31 32 33 34", "Positive Response (0x62) - 1234")
-    
-    push_trace("EVT", "—", "—", f"Test Started: {test_name}")
-    
-    # 2. Setup (Security, Default, Extended...)
-    push_trace("TX", "740", "02 10 03 00 00 00 00 00", "DiagSessionControl (0x10) - Extended")
-    time.sleep(0.1)
-    push_trace("RX", "748", "06 50 03 00 32 01 F4 00", "Positive Response (0x50)")
-    
-    flash_session['progress'] = 20.0
-    
-    # 3. Erase Phase Request
-    push_trace("EVT", "—", "—", "Requesting Erase Phase...")
-    push_trace("TX", "740", "05 31 01 FF 00 02 00 00", "RoutineControl (0x31) - Erase Memory")
-    time.sleep(0.5)
-    push_trace("RX", "748", "03 7F 31 78 00 00 00 00", "NRC (0x7F) - ResponsePending (0x78)")
-    
-    # INTERRUPT!
-    push_trace("EVT", "—", "—", "⚡ 0x78 RECEIVED: FORCING INTERRUPTION...")
-    flash_session['progress'] = 50.0
-    
-    # 4. Wait 1-3 seconds
-    push_trace("EVT", "—", "—", "Waiting 2 seconds for ECU recovery...")
-    time.sleep(2.0)
-    
-    # 5. Check CCM (TesterPresent)
-    push_trace("EVT", "—", "—", "Checking CCM (TesterPresent)...")
-    push_trace("TX", "740", "02 3E 80 00 00 00 00 00", "TesterPresent (0x3E)")
-    time.sleep(0.1)
-    push_trace("RX", "748", "02 7E 00 00 00 00 00 00", "Positive Response (0x7E)")
-    
-    # 6. Check Session (DiagSessionControl)
-    push_trace("EVT", "—", "—", "Checking Session (Default)...")
-    push_trace("TX", "740", "02 10 01 00 00 00 00 00", "DiagSessionControl (0x10) - Default")
-    time.sleep(0.1)
-    push_trace("RX", "748", "06 50 01 00 32 01 F4 00", "Positive Response (0x50)")
-    
-    # 7. Check SW Version again
-    push_trace("EVT", "—", "—", "Verifying SW Version matches pre-flash...")
-    push_trace("TX", "740", "03 22 F1 80 00 00 00 00", "ReadDataByIdentifier (0x22) - SW Version")
-    time.sleep(0.1)
-    push_trace("RX", "748", "07 62 F1 80 31 32 33 34", "Positive Response (0x62) - 1234")
-    
-    push_trace("EVT", "—", "—", "✅ Post-Interruption checks passed. Versions match.")
-    
-    test_obj["status"] = "interrupted"
-    last_interruption_result = {
-        "testId": test_id,
-        "result": "interrupted",
-        "interrupted": True
-    }
-    
-    flash_session['flashCount'] += 1
-    fc = flash_session['flashCount']
-    nvm_memory["F190"] = [(fc >> 8) & 0xFF, fc & 0xFF]
-    
-    flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
-    log_entry = {
-        "id": int(time.time() * 1000),
-        "swFile": flash_session['swFile'],
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "duration": f"{flash_session['elapsedMs'] // 1000}.{(flash_session['elapsedMs'] % 1000)//100}s",
-        "status": "interrupted"
-    }
-    flash_session['sessionLog'].insert(0, log_entry)
-    
-    flash_session['progress'] = 100.0
-    flash_session['total_progress'] = 100.0
-    time.sleep(0.1)
-    flash_session['running'] = False
-
 def _run_interruption_engine(test_id, file_obj):
+    if file_obj and file_obj.get("data_b64"):
+        try:
+            import os
+            import base64
+            from core.hex_parsing import FIRMWARE_DIR
+            os.makedirs(FIRMWARE_DIR, exist_ok=True)
+            fname = file_obj.get("name", "Interruption_Test")
+            filepath = os.path.join(FIRMWARE_DIR, fname)
+            with open(filepath, "wb") as out_file:
+                out_file.write(base64.b64decode(file_obj["data_b64"]))
+        except Exception as e:
+            print(f"[BACKEND] Error saving interruption file: {e}")
+            return
+
     try:
         from core.hex_parsing import DEFAULT_PROFILE
         import core.live_flasher as flasher
         success = flasher.process_live_interruption(DEFAULT_PROFILE, test_id, file_obj)
         if not success:
-            print("[BACKEND] Live flasher failed or missing. Falling back to simulation.")
-            simulate_erase_interruption(test_id, file_obj)
+            print("[BACKEND] Live flasher failed to execute.")
     except (ImportError, Exception) as e:
-        print(f"[BACKEND] Live flasher unavailable ({e}). Falling back to simulation.")
-        simulate_erase_interruption(test_id, file_obj)
+        print(f"[BACKEND] Live flasher unavailable ({e}).")
 
 def start_interruption_test(test_id, file_obj=None):
     if not flash_session['running']:
