@@ -532,9 +532,11 @@ def _run_interruption_engine(test_id, file_obj):
                 print(f"[BACKEND] Error saving interruption file: {e}")
                 return
 
-        from core.hex_parsing import DEFAULT_PROFILE
+        from core.hex_parsing import DEFAULT_PROFILE, load_profile
         import core.live_flasher as flasher
-        success = flasher.process_live_interruption(DEFAULT_PROFILE, test_id, file_obj)
+        
+        profile_data = load_profile(DEFAULT_PROFILE)
+        success = flasher.process_live_interruption(profile_data, test_id, file_obj)
         if not success:
             print("[BACKEND] Live flasher failed to execute.")
     except Exception as e:
