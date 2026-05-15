@@ -26,6 +26,16 @@ interruption_tests = [
 ]
 last_interruption_result = None
 
+interruption_session = {
+    "running": False,
+    "progress": 0.0,
+    "total_progress": 0.0,
+    "elapsedMs": 0,
+    "swFile": "\u2014",
+    "force_stop": False,
+    "sessionLog": []
+}
+
 can_trace_log = []
 TRACE_LOG_MAX = 50000
 TRACE_API_DEFAULT_LIMIT = 1500
@@ -363,6 +373,7 @@ def get_flash_status():
     st["failedFlashes"] = list(flash_session.get("failedFlashes", []))
     st["interruption_tests"] = interruption_tests
     st["last_interruption_result"] = last_interruption_result
+    st["interruption_session"] = dict(interruption_session)
     return st
 
 def _run_flash_engine(files, times):
@@ -529,11 +540,15 @@ def _run_interruption_engine(test_id, file_obj):
     except Exception as e:
         print(f"[BACKEND] Live flasher error ({e}).")
     finally:
-        flash_session['running'] = False
+        interruption_session['running'] = False
 
 def start_interruption_test(test_id, file_obj=None):
-    if not flash_session['running']:
-        flash_session['force_stop'] = False
+    if not interruption_session['running']:
+        interruption_session['force_stop'] = False
+        interruption_session['running'] = True
+        interruption_session['progress'] = 0.0
+        interruption_session['total_progress'] = 0.0
+        interruption_session['elapsedMs'] = 0
         t = threading.Thread(target=_run_interruption_engine, args=(test_id, file_obj))
         t.daemon = True
         t.start()

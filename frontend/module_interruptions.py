@@ -3,8 +3,9 @@ window.InterruptionTests = function({ flashOp, sessionLog }) {
   const { useState } = React;
   const tests = flashOp.interruption_tests || [];
   const lastResult = flashOp.last_interruption_result;
-  const running = flashOp.running;
-  const progress = flashOp.progress || 0;
+  const interSession = flashOp.interruption_session || {};
+  const running = interSession.running || false;
+  const progress = interSession.progress || 0;
   
   const currentRunningTest = tests.find(t => t.status === "running");
   const activeTestId = lastResult ? lastResult.testId : null;

@@ -375,11 +375,11 @@ def process_live_interruption(profile, test_id, file_obj):
     expected_rx_id = int(ctx.response_id, 16)
     tx_can_id_int = int(ctx.request_id, 16)
     
-    api.flash_session['swFile'] = fname
-    api.flash_session['progress'] = 0.0
-    api.flash_session['total_progress'] = 0.0
-    api.flash_session['elapsedMs'] = 0
-    api.flash_session['running'] = True
+    api.interruption_session['swFile'] = fname
+    api.interruption_session['progress'] = 0.0
+    api.interruption_session['total_progress'] = 0.0
+    api.interruption_session['elapsedMs'] = 0
+    api.interruption_session['running'] = True
     op_start = int(time.time() * 1000)
     
     api.start_file_trace()
@@ -403,13 +403,13 @@ def process_live_interruption(profile, test_id, file_obj):
         last_tx_msg = None
         
         for i, frame in enumerate(trace):
-            if api.flash_session.get('force_stop'):
+            if api.interruption_session.get('force_stop'):
                 break
                 
             p = (i / total_frames) * 100.0
-            api.flash_session['progress'] = p
-            api.flash_session['total_progress'] = p
-            api.flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
+            api.interruption_session['progress'] = p
+            api.interruption_session['total_progress'] = p
+            api.interruption_session['elapsedMs'] = int(time.time() * 1000) - op_start
             
             if frame.direction == 'Tx':
                 if frame.comment:
@@ -495,8 +495,8 @@ def process_live_interruption(profile, test_id, file_obj):
         api.push_trace("EVT", "—", "—", f"Sequence aborted: {e}")
         
     if interrupted:
-        api.flash_session['progress'] = 50.0
-        api.flash_session['total_progress'] = 50.0
+        api.interruption_session['progress'] = 50.0
+        api.interruption_session['total_progress'] = 50.0
         api.push_trace("EVT", "—", "—", "Waiting 2 seconds for ECU recovery...")
         time.sleep(2.0)
         
@@ -530,8 +530,8 @@ def process_live_interruption(profile, test_id, file_obj):
         
         api.push_trace("EVT", "—", "—", "✅ Post-Interruption checks completed.")
         
-    api.flash_session['elapsedMs'] = int(time.time() * 1000) - op_start
-    elapsed_ms = api.flash_session['elapsedMs']
+    api.interruption_session['elapsedMs'] = int(time.time() * 1000) - op_start
+    elapsed_ms = api.interruption_session['elapsedMs']
     log_id = int(time.time() * 1000)
     
     result_status = "interrupted" if interrupted else "failed"
@@ -545,8 +545,8 @@ def process_live_interruption(profile, test_id, file_obj):
     if test_obj:
         test_obj["status"] = result_status
         
-    api.flash_session['progress'] = 100.0
-    api.flash_session['total_progress'] = 100.0
+    api.interruption_session['progress'] = 100.0
+    api.interruption_session['total_progress'] = 100.0
     
     log_entry = {
         "id": log_id,
@@ -557,9 +557,9 @@ def process_live_interruption(profile, test_id, file_obj):
         "status": result_status,
         "has_trace": api.finish_file_trace(log_id)
     }
-    api.flash_session['sessionLog'].insert(0, log_entry)
+    api.interruption_session['sessionLog'].insert(0, log_entry)
     
     time.sleep(0.1)
-    api.flash_session['running'] = False
+    api.interruption_session['running'] = False
     bus.shutdown()
     return True
