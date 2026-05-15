@@ -506,31 +506,34 @@ def update_nvm_map(addr, val):
     return {"status": "success"}
 
 def _run_interruption_engine(test_id, file_obj):
-    if file_obj and file_obj.get("data_b64"):
-        try:
-            import os
-            import base64
-            from core.hex_parsing import FIRMWARE_DIR
-            os.makedirs(FIRMWARE_DIR, exist_ok=True)
-            fname = file_obj.get("name", "Interruption_Test")
-            filepath = os.path.join(FIRMWARE_DIR, fname)
-            with open(filepath, "wb") as out_file:
-                out_file.write(base64.b64decode(file_obj["data_b64"]))
-        except Exception as e:
-            print(f"[BACKEND] Error saving interruption file: {e}")
-            return
-
     try:
+        if file_obj and file_obj.get("data_b64"):
+            try:
+                import os
+                import base64
+                from core.hex_parsing import FIRMWARE_DIR
+                os.makedirs(FIRMWARE_DIR, exist_ok=True)
+                fname = file_obj.get("name", "Interruption_Test")
+                filepath = os.path.join(FIRMWARE_DIR, fname)
+                with open(filepath, "wb") as out_file:
+                    out_file.write(base64.b64decode(file_obj["data_b64"]))
+            except Exception as e:
+                print(f"[BACKEND] Error saving interruption file: {e}")
+                return
+
         from core.hex_parsing import DEFAULT_PROFILE
         import core.live_flasher as flasher
         success = flasher.process_live_interruption(DEFAULT_PROFILE, test_id, file_obj)
         if not success:
             print("[BACKEND] Live flasher failed to execute.")
-    except (ImportError, Exception) as e:
-        print(f"[BACKEND] Live flasher unavailable ({e}).")
+    except Exception as e:
+        print(f"[BACKEND] Live flasher error ({e}).")
+    finally:
+        flash_session['running'] = False
 
 def start_interruption_test(test_id, file_obj=None):
     if not flash_session['running']:
+        flash_session['force_stop'] = False
         t = threading.Thread(target=_run_interruption_engine, args=(test_id, file_obj))
         t.daemon = True
         t.start()

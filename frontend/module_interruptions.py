@@ -39,6 +39,15 @@ window.InterruptionTests = function({ flashOp, sessionLog }) {
         test_id: id, 
         file: { name: hexFile.fileName, data_b64: hexFile.data_b64 } 
       })
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (!data.started) {
+        if (window.showToast) window.showToast("Test could not start. A session may already be running.", "error");
+      }
+    })
+    .catch(err => {
+      if (window.showToast) window.showToast("Failed to reach server: " + err.message, "error");
     });
   }
 
