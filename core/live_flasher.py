@@ -384,23 +384,24 @@ def process_live_interruption(profile, test_id, file_obj):
     
     api.start_file_trace()
     
-    # 1. Pre-flash ECU version read
-    api.push_trace("EVT", "—", "—", "Reading initial ECU version...")
-    read_current_ecu_version(bus, runtime, profile, ctx, tx_can_id_int, expected_rx_id, "Initial ECU version")
-    
-    api.push_trace("EVT", "—", "—", f"Test Started: Erase Phase Interruption")
-    
-    parsed_segments = parse_intel_hex_segments(hex_path)
-    selected_segments = select_flash_segments(parsed_segments, ctx)
-    trace = build_flash_sequence(selected_segments, ctx)
-    total_frames = len(trace)
-    
-    real_send_key_frames = []
-    last_tx_msg = None
-    
     interrupted = False
     
     try:
+        # 1. Pre-flash ECU version read
+        api.push_trace("EVT", "—", "—", "Reading initial ECU version...")
+        if not read_current_ecu_version(bus, runtime, profile, ctx, tx_can_id_int, expected_rx_id, "Initial ECU version"):
+            raise RuntimeError("ECU not detected. Please connect the ECU and retry.")
+        
+        api.push_trace("EVT", "—", "—", f"Test Started: Erase Phase Interruption")
+        
+        parsed_segments = parse_intel_hex_segments(hex_path)
+        selected_segments = select_flash_segments(parsed_segments, ctx)
+        trace = build_flash_sequence(selected_segments, ctx)
+        total_frames = len(trace)
+        
+        real_send_key_frames = []
+        last_tx_msg = None
+        
         for i, frame in enumerate(trace):
             if api.flash_session.get('force_stop'):
                 break
