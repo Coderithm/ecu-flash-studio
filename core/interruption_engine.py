@@ -567,3 +567,343 @@ def _wait_for_response_with_interrupt(bus, expected_rx_id, expected_data, runtim
             return ReceivedResponse(msg=msg, payload=sf_payload, raw_frames=[bytes(msg.data)])
 
     return None
+
+
+def run_erase_data_change_interruption(profile, test_id, file_obj):
+    """
+    Erase Flash Phase Data Change Interruption Test.
+    
+    Same protocol as multiflash, but modifies byte 5 of the erase
+    RoutineControl frame to 0x02 (corrupted data). The ECU should
+    reject this with a negative response (7F 31 XX). After the
+    negative response, post-interruption checks verify ECU health.
+    """
+    if can is None:
+        api.push_trace("EVT", "—", "—", "FAILED: python-can not installed")
+        return False
+
+    baudrate = 500000
+    ctx = build_runtime_context(profile)
+
+    if not validate_live_security_config(profile):
+        api.push_trace("EVT", "—", "—", "FAILED: Security configuration validation failed")
+        return False
+
+    runtime = build_live_runtime(profile, ctx)
+
+    fname = "Interruption_Test"
+    if file_obj and file_obj.get("name"):
+        fname = file_obj["name"]
+
+    hex_path = os.path.join(FIRMWARE_DIR, fname)
+    if not os.path.exists(hex_path):
+        api.push_trace("EVT", "—", "—", f"FAILED: File not found: {fname}")
+        return False
+
+    try:
+        api.push_trace("EVT", "—", "—", f"Initializing PCAN at {baudrate} bps...")
+        bus = can.interface.Bus(interface='pcan', channel='PCAN_USBBUS1', bitrate=baudrate)
+    except Exception as e:
+        api.push_trace("EVT", "—", "—", f"FAILED: PCAN init failed: {e}")
+        return False
+
+    expected_rx_id = int(ctx.response_id, 16)
+    tx_can_id_int = int(ctx.request_id, 16)
+
+    api.interruption_session['swFile'] = fname
+    api.interruption_session['progress'] = 0.0
+    api.interruption_session['total_progress'] = 0.0
+    api.interruption_session['elapsedMs'] = 0
+    api.interruption_session['running'] = True
+    op_start = int(time.time() * 1000)
+
+    api.start_file_trace()
+
+    interrupted = False
+    pre_flash_version = None
+    post_flash_version = None
+    ccm_pass = False
+    session_pass = False
+    version_match = False
+
+    try:
+        # ============================================================
+        # PRECONDITION CHECKS (same as Test 1)
+        # ============================================================
+        api.push_trace("EVT", "—", "—", "═══ PRECONDITION CHECKS ═══")
+
+        api.push_trace("EVT", "—", "—", "Checking ECU connectivity (TesterPresent)...")
+        ecu_alive = False
+        for attempt in range(1, 6):
+            if _check_tester_present(bus, runtime, tx_can_id_int, expected_rx_id):
+                ecu_alive = True
+                break
+            if attempt < 5:
+                api.push_trace("EVT", "—", "—", f"ECU not responding, retrying in 2s... ({attempt}/5)")
+                time.sleep(2.0)
+        if not ecu_alive:
+            raise RuntimeError("Precondition FAILED: ECU not responding after 5 attempts.")
+
+        api.push_trace("EVT", "—", "—", "✅ Vbatt=ON, Ignition=ON, ECU Connected, CAN OK")
+
+        api.push_trace("EVT", "—", "—", "Reading SW version before flashing...")
+        pre_flash_version = _read_sw_version_string(bus, runtime, profile, ctx, tx_can_id_int, expected_rx_id)
+        if pre_flash_version:
+            api.push_trace("EVT", "—", "—", f"✅ Pre-flash SW Version: {pre_flash_version}")
+        else:
+            api.push_trace("EVT", "—", "—", "⚠ Could not read SW version")
+
+        api.push_trace("EVT", "—", "—", "═══ ALL PRECONDITIONS PASSED ═══")
+
+        # ============================================================
+        # ACTION: Flash with corrupted erase data
+        # ============================================================
+        api.push_trace("EVT", "—", "—", "═══ STARTING FLASH SEQUENCE (Erase Data Change Interruption) ═══")
+
+        parsed_segments = parse_intel_hex_segments(hex_path)
+        selected_segments = select_flash_segments(parsed_segments, ctx)
+        trace = build_flash_sequence(selected_segments, ctx)
+        total_frames = len(trace)
+
+        api.push_trace("EVT", "—", "—", f"Executing {total_frames} frames for {fname}")
+
+        real_send_key_frames = []
+        last_tx_msg = None
+        erase_frame_sent = False
+
+        for i, frame in enumerate(trace):
+            if api.interruption_session.get('force_stop'):
+                api.push_trace("EVT", "—", "—", "Force stop requested by operator")
+                break
+
+            p = (i / total_frames) * 100.0
+            api.interruption_session['progress'] = p
+            api.interruption_session['total_progress'] = p
+            api.interruption_session['elapsedMs'] = int(time.time() * 1000) - op_start
+
+            # ── TRANSMIT ──
+            if frame.direction == 'Tx':
+                if frame.comment:
+                    api.push_trace("EVT", "—", "—", f"Step {i+1}/{total_frames}: {frame.comment}")
+
+                send_data = list(frame.data)
+                if real_send_key_frames and 'send key' in (frame.comment or '').lower():
+                    send_data = real_send_key_frames.pop(0)
+                elif real_send_key_frames and (frame.data[0] >> 4) == 0x2:
+                    send_data = real_send_key_frames.pop(0)
+
+                if runtime.drain_before_critical and is_critical_request(send_data):
+                    if not drain_bus(bus, runtime, f"before {frame.comment or 'request'}"):
+                        raise RuntimeError("External tester traffic detected")
+
+                # *** KEY DIFFERENCE: Corrupt erase frame byte 5 ***
+                if _is_erase_routine_request(send_data) and not erase_frame_sent:
+                    original_byte5 = send_data[5] if len(send_data) > 5 else 0x00
+                    send_data[5] = 0x02
+                    erase_frame_sent = True
+                    api.push_trace("EVT", "—", "—", f"⚡ ERASE FRAME DETECTED — Modifying byte 5: 0x{original_byte5:02X} → 0x02")
+
+                msg = can.Message(
+                    arbitration_id=int(frame.can_id, 16),
+                    data=send_data,
+                    is_extended_id=False
+                )
+
+                if is_clear_dtc_request(msg):
+                    if not wait_for_bus_idle(bus, runtime, "ClearDTC"):
+                        raise RuntimeError("Bus not idle before ClearDTC")
+
+                send_live(bus, msg, runtime)
+                last_tx_msg = msg
+
+                data_hex = ' '.join(f'{b:02X}' for b in send_data)
+                api.push_trace("TX", hex(msg.arbitration_id)[2:].upper(), data_hex, frame.comment)
+
+                pci_nibble = send_data[0] >> 4
+                if pci_nibble == 0x1:
+                    fc_msg = wait_for_flow_control(bus, expected_rx_id, runtime, timeout=1.0)
+                    if not fc_msg:
+                        raise RuntimeError("Timeout waiting for FlowControl from ECU")
+                    fc_hex = ' '.join(f'{b:02X}' for b in fc_msg.data)
+                    api.push_trace("RX", hex(fc_msg.arbitration_id)[2:].upper(), fc_hex, "FlowControl")
+
+            # ── RECEIVE ──
+            elif frame.direction == 'Rx':
+                pci = frame.data[0] >> 4
+                if pci == 0x2 or pci == 0x3:
+                    continue
+                if is_response_pending_frame(frame.data):
+                    continue
+
+                timeout = response_timeout_for(frame)
+
+                # After corrupted erase frame, catch negative response as interrupt
+                if erase_frame_sent:
+                    rx_msg = wait_for_response(
+                        bus, expected_rx_id, frame.data, runtime,
+                        operation_timeout=timeout, tx_can_id=tx_can_id_int,
+                    )
+                    if rx_msg:
+                        rx_hex = ' '.join(f'{b:02X}' for b in rx_msg.msg.data)
+                        neg = describe_negative_response(rx_msg.payload)
+                        if neg:
+                            api.push_trace("RX", hex(rx_msg.msg.arbitration_id)[2:].upper(), rx_hex, f"Negative Response: {neg}")
+                            api.push_trace("EVT", "—", "—", f"⚡⚡⚡ NEGATIVE RESPONSE RECEIVED — ECU REJECTED CORRUPTED ERASE — INTERRUPTING ⚡⚡⚡")
+                            interrupted = True
+                            break
+                        else:
+                            api.push_trace("RX", hex(rx_msg.msg.arbitration_id)[2:].upper(), rx_hex, frame.comment)
+                            erase_frame_sent = False  # ECU accepted despite corruption?
+                    else:
+                        raise RuntimeError("Timeout waiting for ECU response after corrupted erase")
+                else:
+                    rx_msg = wait_for_response(
+                        bus, expected_rx_id, frame.data, runtime,
+                        operation_timeout=timeout, tx_can_id=tx_can_id_int,
+                    )
+
+                    if not rx_msg:
+                        if is_ecu_reset_response(frame):
+                            api.push_trace("EVT", "—", "—", "No ECUReset response (ECU rebooting — normal)")
+                            if runtime.post_reset_cleanup_delay > 0:
+                                time.sleep(runtime.post_reset_cleanup_delay)
+                            continue
+                        elif should_retry_response(frame) and last_tx_msg is not None:
+                            for attempt in range(1, runtime.clear_dtc_retries + 1):
+                                api.push_trace("EVT", "—", "—", f"No response; retrying ({attempt}/{runtime.clear_dtc_retries})...")
+                                time.sleep(runtime.clear_dtc_retry_delay)
+                                send_live(bus, last_tx_msg, runtime)
+                                rx_msg = wait_for_response(
+                                    bus, expected_rx_id, frame.data, runtime,
+                                    operation_timeout=timeout, tx_can_id=tx_can_id_int,
+                                )
+                                if rx_msg:
+                                    break
+                            if not rx_msg:
+                                expected_hex = ' '.join(f'{b:02X}' for b in frame.data)
+                                raise RuntimeError(f"Timeout after retry. Expected: {expected_hex}")
+                        else:
+                            expected_hex = ' '.join(f'{b:02X}' for b in frame.data)
+                            raise RuntimeError(f"Timeout waiting for ECU response: {expected_hex}")
+
+                    rx_hex = ' '.join(f'{b:02X}' for b in rx_msg.msg.data)
+                    api.push_trace("RX", hex(rx_msg.msg.arbitration_id)[2:].upper(), rx_hex, frame.comment)
+
+                    negative_response = describe_negative_response(rx_msg.payload)
+                    if negative_response:
+                        raise RuntimeError(f"ECU negative response: {negative_response}")
+
+                    payload = rx_msg.payload
+                    if payload and len(payload) >= 3 and payload[0] == 0x67:
+                        seed = payload[2:]
+                        real_key = build_security_key(ctx, seed)
+                        sf_byte = int(profile['security']['send_key']['subfunction'], 16)
+                        send_key_payload = bytes([0x27, sf_byte]) + real_key
+                        real_send_key_frames = isotp_encode(send_key_payload, ctx.pad_byte)
+                        security_key_delay = int(profile.get("timing", {}).get("security_key_delay_ms", 50)) / 1000.0
+                        if security_key_delay > 0:
+                            time.sleep(security_key_delay)
+                    elif payload and len(payload) >= 2 and payload[0] == 0x51:
+                        if runtime.post_reset_cleanup_delay > 0:
+                            time.sleep(runtime.post_reset_cleanup_delay)
+
+    except Exception as e:
+        api.push_trace("EVT", "—", "—", f"Sequence aborted: {e}")
+
+    # ============================================================
+    # POST-INTERRUPTION VERIFICATION (same as Test 1)
+    # ============================================================
+    if interrupted:
+        api.interruption_session['progress'] = 60.0
+        api.interruption_session['total_progress'] = 60.0
+
+        recovery_wait = 3.0
+        api.push_trace("EVT", "—", "—", f"═══ INTERRUPTION TRIGGERED — Waiting {recovery_wait}s for ECU recovery ═══")
+        time.sleep(recovery_wait)
+
+        api.push_trace("EVT", "—", "—", "═══ POST-INTERRUPTION CHECKS ═══")
+
+        api.push_trace("EVT", "—", "—", "CHECK 1: CCM Communication (TesterPresent)...")
+        for ccm_attempt in range(1, 4):
+            ccm_pass = _check_tester_present(bus, runtime, tx_can_id_int, expected_rx_id)
+            if ccm_pass:
+                break
+            if ccm_attempt < 3:
+                api.push_trace("EVT", "—", "—", f"ECU still recovering, retrying CCM in 1s... ({ccm_attempt}/3)")
+                time.sleep(1.0)
+        api.interruption_session['progress'] = 70.0
+
+        api.push_trace("EVT", "—", "—", "CHECK 2: Session Check (Default Session)...")
+        session_pass = _check_default_session(bus, runtime, tx_can_id_int, expected_rx_id)
+        api.interruption_session['progress'] = 80.0
+
+        api.push_trace("EVT", "—", "—", "CHECK 3: Software Version Check...")
+        post_flash_version = _read_sw_version_string(bus, runtime, profile, ctx, tx_can_id_int, expected_rx_id)
+        if post_flash_version:
+            api.push_trace("EVT", "—", "—", f"Post-Interruption SW Version: {post_flash_version}")
+            if pre_flash_version and post_flash_version == pre_flash_version:
+                version_match = True
+                api.push_trace("EVT", "—", "—", f"✅ SW Version MATCH: {post_flash_version} == {pre_flash_version}")
+            elif pre_flash_version:
+                api.push_trace("EVT", "—", "—", f"❌ SW Version MISMATCH: {post_flash_version} != {pre_flash_version}")
+            else:
+                api.push_trace("EVT", "—", "—", "⚠ Cannot compare — pre-flash version was not available")
+        else:
+            api.push_trace("EVT", "—", "—", "❌ FAILED: Could not read post-interruption SW version")
+        api.interruption_session['progress'] = 90.0
+
+        api.push_trace("EVT", "—", "—", "═══ TEST RESULTS ═══")
+        api.push_trace("EVT", "—", "—", f"  CCM (TesterPresent): {'✅ PASS' if ccm_pass else '❌ FAIL'}")
+        api.push_trace("EVT", "—", "—", f"  Session Check:       {'✅ PASS' if session_pass else '❌ FAIL'}")
+        api.push_trace("EVT", "—", "—", f"  SW Version Match:    {'✅ PASS' if version_match else '❌ FAIL'}")
+
+        all_pass = ccm_pass and session_pass and version_match
+        if all_pass:
+            api.push_trace("EVT", "—", "—", "═══ ✅ ERASE DATA CHANGE INTERRUPTION TEST: PASSED ═══")
+        else:
+            api.push_trace("EVT", "—", "—", "═══ ❌ ERASE DATA CHANGE INTERRUPTION TEST: FAILED ═══")
+
+    # Record result
+    api.interruption_session['elapsedMs'] = int(time.time() * 1000) - op_start
+    elapsed_ms = api.interruption_session['elapsedMs']
+    log_id = int(time.time() * 1000)
+
+    if interrupted:
+        all_pass = ccm_pass and session_pass and version_match
+        result_status = "passed" if all_pass else "failed"
+    else:
+        result_status = "failed"
+
+    api.last_interruption_result = {
+        "testId": test_id,
+        "result": result_status,
+        "interrupted": interrupted,
+        "ccm_pass": ccm_pass,
+        "session_pass": session_pass,
+        "version_match": version_match,
+        "pre_version": pre_flash_version,
+        "post_version": post_flash_version,
+    }
+
+    test_obj = next((t for t in api.interruption_tests if t["id"] == test_id), None)
+    if test_obj:
+        test_obj["status"] = result_status
+
+    api.interruption_session['progress'] = 100.0
+    api.interruption_session['total_progress'] = 100.0
+
+    log_entry = {
+        "id": log_id,
+        "swFile": fname,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "duration": f"{elapsed_ms // 1000}.{(elapsed_ms % 1000)//100}s",
+        "duration_ms": elapsed_ms,
+        "status": result_status,
+        "has_trace": api.finish_file_trace(log_id)
+    }
+    api.interruption_session['sessionLog'].insert(0, log_entry)
+
+    time.sleep(0.1)
+    api.interruption_session['running'] = False
+    bus.shutdown()
+    return True

@@ -22,7 +22,8 @@ flash_session = {
 }
 
 interruption_tests = [
-    { "id": 1, "name": "Erase Phase Interruption", "status": "idle" }
+    { "id": 1, "name": "Erase Phase Interruption", "status": "idle" },
+    { "id": 2, "name": "Erase Data Change Interruption", "status": "idle" }
 ]
 last_interruption_result = None
 
@@ -533,12 +534,15 @@ def _run_interruption_engine(test_id, file_obj):
                 return
 
         from core.hex_parsing import DEFAULT_PROFILE, load_profile
-        import core.live_flasher as flasher
+        from core.interruption_engine import run_erase_interruption, run_erase_data_change_interruption
         
         profile_data = load_profile(DEFAULT_PROFILE)
-        success = flasher.process_live_interruption(profile_data, test_id, file_obj)
+        if test_id == 2:
+            success = run_erase_data_change_interruption(profile_data, test_id, file_obj)
+        else:
+            success = run_erase_interruption(profile_data, test_id, file_obj)
         if not success:
-            print("[BACKEND] Live flasher failed to execute.")
+            print("[BACKEND] Interruption engine failed to execute.")
     except Exception as e:
         print(f"[BACKEND] Live flasher error ({e}).")
     finally:
