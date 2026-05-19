@@ -394,15 +394,21 @@ def run_erase_interruption(profile, test_id, file_obj):
         api.interruption_session['progress'] = 60.0
         api.interruption_session['total_progress'] = 60.0
 
-        recovery_wait = 2.0
+        recovery_wait = 3.0
         api.push_trace("EVT", "—", "—", f"═══ INTERRUPTION TRIGGERED — Waiting {recovery_wait}s for ECU recovery ═══")
         time.sleep(recovery_wait)
 
         api.push_trace("EVT", "—", "—", "═══ POST-INTERRUPTION CHECKS ═══")
 
-        # Check 1: CCM (TesterPresent)
+        # Check 1: CCM (TesterPresent) — retry up to 3 times since ECU may still be settling
         api.push_trace("EVT", "—", "—", "CHECK 1: CCM Communication (TesterPresent)...")
-        ccm_pass = _check_tester_present(bus, runtime, tx_can_id_int, expected_rx_id)
+        for ccm_attempt in range(1, 4):
+            ccm_pass = _check_tester_present(bus, runtime, tx_can_id_int, expected_rx_id)
+            if ccm_pass:
+                break
+            if ccm_attempt < 3:
+                api.push_trace("EVT", "—", "—", f"ECU still recovering, retrying CCM in 1s... ({ccm_attempt}/3)")
+                time.sleep(1.0)
         api.interruption_session['progress'] = 70.0
 
         # Check 2: Session Check
