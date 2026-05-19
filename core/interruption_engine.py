@@ -95,8 +95,8 @@ def _read_sw_version_string(bus, runtime, profile, ctx, tx_can_id, rx_can_id):
 
 
 def _check_tester_present(bus, runtime, tx_can_id, rx_can_id):
-    """Send TesterPresent (0x3E 0x80) and check for positive response."""
-    tp_data = [0x02, 0x3E, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00]
+    """Send TesterPresent (0x3E 0x00) and check for positive response."""
+    tp_data = [0x02, 0x3E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
     tp_msg = can.Message(arbitration_id=tx_can_id, data=tp_data, is_extended_id=False)
     send_live(bus, tp_msg, runtime)
     data_hex = ' '.join(f'{b:02X}' for b in tp_data)
