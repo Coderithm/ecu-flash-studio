@@ -54,13 +54,26 @@ window.InterruptionTests = function({ flashOp, sessionLog }) {
 
   let passFailDisplay = null;
   if (!running && lastResult) {
-    const passed = lastResult.interrupted;
+    const passed = lastResult.result === "passed";
+    const details = [];
+    if (lastResult.ccm_pass !== undefined) details.push({ label: "CCM", ok: lastResult.ccm_pass });
+    if (lastResult.session_pass !== undefined) details.push({ label: "Session", ok: lastResult.session_pass });
+    if (lastResult.version_match !== undefined) details.push({ label: "SW Version", ok: lastResult.version_match });
     passFailDisplay = (
-      <div style={{ background: passed ? "rgba(16,185,129,0.15)" : "rgba(220,38,38,0.15)", border: `1px solid ${passed ? "#10b981" : "#ef4444"}`, borderRadius: 8, padding: "8px 16px", display: "inline-flex", alignItems: "center", gap: 8, marginTop: 10 }}>
-        <span style={{ fontSize: 20 }}>{passed ? "✅" : "❌"}</span>
-        <div style={{ display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, width: "100%" }}>
+        <div style={{ background: passed ? "rgba(16,185,129,0.15)" : "rgba(220,38,38,0.15)", border: `1px solid ${passed ? "#10b981" : "#ef4444"}`, borderRadius: 8, padding: "8px 16px", display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 20 }}>{passed ? "✅" : "❌"}</span>
           <span style={{ fontSize: 13, fontWeight: 800, color: passed ? "#059669" : "#b91c1c" }}>{passed ? "TEST PASSED" : "TEST FAILED"}</span>
         </div>
+        {details.length > 0 && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {details.map(d => (
+              <div key={d.label} style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 6, background: d.ok ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)", color: d.ok ? "#059669" : "#ef4444", border: `1px solid ${d.ok ? "#10b981" : "#ef4444"}` }}>
+                {d.ok ? "✓" : "✗"} {d.label}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
