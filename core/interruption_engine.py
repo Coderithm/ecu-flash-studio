@@ -213,8 +213,17 @@ def run_erase_interruption(profile, test_id, file_obj):
         # 1-2. Vbatt + Ignition (verified by ECU responding to TesterPresent)
         # 3-4. ECU connected + CAN communication
         api.push_trace("EVT", "—", "—", "Checking ECU connectivity (TesterPresent)...")
-        if not _check_tester_present(bus, runtime, tx_can_id_int, expected_rx_id):
-            raise RuntimeError("Precondition FAILED: ECU not responding. Check Vbatt, Ignition, CAN connection.")
+        ecu_alive = False
+        max_retries = 5
+        for attempt in range(1, max_retries + 1):
+            if _check_tester_present(bus, runtime, tx_can_id_int, expected_rx_id):
+                ecu_alive = True
+                break
+            if attempt < max_retries:
+                api.push_trace("EVT", "—", "—", f"ECU not responding, retrying in 2s... ({attempt}/{max_retries})")
+                time.sleep(2.0)
+        if not ecu_alive:
+            raise RuntimeError("Precondition FAILED: ECU not responding after 5 attempts. Check Vbatt, Ignition, CAN connection.")
 
         api.push_trace("EVT", "—", "—", "✅ Vbatt=ON, Ignition=ON, ECU Connected, CAN OK")
 
